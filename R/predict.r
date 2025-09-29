@@ -3,13 +3,12 @@
 #' @param X An n x p matrix of predictors
 #' @param Beta A p-vector of regression coefficients
 #' @param sigma An n-vector of standard deviations for the latent variables,
-#' @param type The inverse link function, currently one of
+#' @param link The inverse link function, currently one of
 #' "Linear", "Exponential", or "Logistic"
 #' @param num_nodes Number of nodes for Gaussian quadrature used to calculate predictions
 #' @return A vector of predicted (fitted) values
 #' @export
-pred_base <- function(X, Beta, sigma, type = "Exponential",
-                      num_nodes = 15)
+pred_base <- function(X, Beta, sigma, link = "log", num_nodes = 15)
 {
   # Argument checking
   stopifnot(is.matrix(X),
@@ -25,11 +24,11 @@ pred_base <- function(X, Beta, sigma, type = "Exponential",
   stopifnot(floor(n) == n, length(Beta) == p, length(sigma) == n)
   Xb <-as.vector(X %*% Beta)
 
-  if(type == "Linear"){
+  if(link == "identity"){
     return(Xb)
   }
 
-  if(type == "Exponential"){
+  if(link == "log"){
     Xb <- exp(Xb + 0.5 * sigma^2)
     return(Xb)
   }
@@ -42,18 +41,43 @@ pred_base <- function(X, Beta, sigma, type = "Exponential",
   W0 <- matrix(rep(nodes, each = n), nrow = n, ncol = num_nodes,
                byrow = FALSE)
 
-  if(type == "Logistic"){
+  if(link == "logit"){
     W <- W0 * sigma
     W <- W + Xb
+
+    # Only the next line is specific to logit; could replace by any other link
     W <- 1 / (1 + exp(-W))
+
     W <- t(weights * t(W))
     Xb <- rowSums(W)
   } else{
-    warning("Requested type not implemented")
+    warning("Requested link not implemented; returning NA")
     Xb <- rep(NA, n)
   }
-
   return(Xb)
 }
 
+pred_glmer <- function(fit)
+{
+  X <- lme4::getME(fit, "X")
+  Beta <- lme4::getME(fit, "beta")
 
+  if(class(fit) == "lmerMod"){
+    pred <- X %*% Beta
+  } else{ # Nonlinear
+    H <- lme4::getME(fit, "Z") %*% lme4::getME(fit, "Lambda")
+    sigma <- sqrt(rowSums(H^2))
+    pred <- pred_base(X = X, Beta = Beta, sigma = sigma, link = fit@resp$family$link)
+
+    if(fit@resp$family$family == "binomial") # Give expected count
+      pred <- fit@resp$n * pred
+  }
+  pred
+}
+
+
+
+pred_glmmtmb <-function(fit)
+{
+
+}
