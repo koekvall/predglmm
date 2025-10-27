@@ -4,19 +4,12 @@
 #' @param Beta A p-vector of regression coefficients
 #' @param sigma An n-vector of standard deviations for the latent variables,
 #' @param link The inverse link function, currently one of
-#' "Linear", "Exponential", or "Logistic"
+#' "identity", "log", or "logit"
 #' @param num_nodes Number of nodes for Gaussian quadrature used to calculate predictions
 #' @return A vector of predicted (fitted) values
 #' @export
 pred_base <- function(X, Beta, sigma, link = "log", num_nodes = 15)
 {
-  # Argument checking
-  stopifnot(is.matrix(X),
-            is.numeric(Beta), is.atomic(Beta),
-            is.numeric(sigma), is.atomic(sigma), all(sigma >= 0),
-            is.numeric(num_nodes), is.atomic(num_nodes),
-            length(num_nodes) == 1, floor(num_nodes) == num_nodes,
-            num_nodes >= 1)
 
   # Define constants
   p <- ncol(X)
@@ -30,6 +23,11 @@ pred_base <- function(X, Beta, sigma, link = "log", num_nodes = 15)
 
   if(link == "log"){
     Xb <- exp(Xb + 0.5 * sigma^2)
+    return(Xb)
+  }
+
+  if(link == "sqrt"){
+    Xb <- Xb^2 + sigma^2
     return(Xb)
   }
 
@@ -79,5 +77,31 @@ pred_glmer <- function(fit)
 
 pred_glmmtmb <-function(fit)
 {
+  VC <- VarCorr(fit)
+
+  # Get lme4 structure
+  re_terms <- lme4::mkReTrms(bars = lme4::findbars(formula(fit)),
+                             fr = fit$frame,
+                             reorder.terms = F # for compatibility w. glmmTMB
+                             )
+  # Iterate over grouping factors to fill in covariance matrix elements
+  theta <- c()
+  for(ii in 1:length(VC$cond)){
+    theta <- c(theta, VC$cond[[ii]][lower.tri(VC$cond[[ii]], diag = T)])
+  }
+  Psi <- re_terms$Lambdat
+
+  # Fill in the upper triangular part of Psi with the extracted elements
+  Psi@x <- theta[re_terms$Lind]
+
+  # Make matrix symmetric
+  Psi <- Matrix::forceSymmetric(Psi, uplo = "U")
+
+  sigma <- rowSums(crossprod(re_terms$Zt, Psi) * t(re_terms$Zt))
+
+  pred_base(X = getME(fit, "X"),
+            Beta = getME(fit, "beta"),
+            sigma = sigma,
+            link = fit$modelInfo$family$link)
 
 }
