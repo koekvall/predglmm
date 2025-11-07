@@ -4,22 +4,32 @@
 \alias{pred_base}
 \title{Calculate predictions (marginal expectations)}
 \usage{
-pred_base(eta, sigma = NA, link_name = NA, num_nodes = 15, inv_link = NA)
+pred_base(
+  eta,
+  sigma = rep(0, length(eta)),
+  link_name = NA,
+  num_nodes = 15,
+  inv_link = NA
+)
 }
 \arguments{
 \item{eta}{An n-vector of linear predictor values (eta = X \%*\% beta)}
 
 \item{sigma}{An n-vector of standard deviations for the random effects.
-If NA (default), assumes no random effects (sigma = 0).}
+Default is zeros (no random effects). NA values are replaced with zeros.}
 
 \item{link_name}{Character string specifying the link function. Currently supports
-"identity", "log", or "sqrt". Use NA if providing a custom inv_link function.}
+"identity", "log", or "sqrt". Use NA if providing a custom inv_link function.
+If both link_name and inv_link are provided, uses link_name if it's supported,
+otherwise falls back to inv_link with numerical integration.}
 
 \item{num_nodes}{Number of nodes for Gaussian quadrature used to calculate predictions
 when using a custom inv_link function (default: 15)}
 
 \item{inv_link}{Custom inverse link function. If provided, numerical integration
-via Gaussian quadrature is used. Use NA if providing link_name instead.}
+via Gaussian quadrature is used. Use NA if providing link_name instead.
+Must be a vectorized function that accepts a numeric vector and returns
+a numeric vector of the same length.}
 }
 \value{
 A vector of predicted (fitted) values on the response scale

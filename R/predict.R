@@ -2,34 +2,52 @@
 #'
 #' @param eta An n-vector of linear predictor values (eta = X %*% beta)
 #' @param sigma An n-vector of standard deviations for the random effects.
-#'   If NA (default), assumes no random effects (sigma = 0).
+#'   Default is zeros (no random effects). NA values are replaced with zeros.
 #' @param link_name Character string specifying the link function. Currently supports
 #'   "identity", "log", or "sqrt". Use NA if providing a custom inv_link function.
+#'   If both link_name and inv_link are provided, uses link_name if it's supported,
+#'   otherwise falls back to inv_link with numerical integration.
 #' @param num_nodes Number of nodes for Gaussian quadrature used to calculate predictions
 #'   when using a custom inv_link function (default: 15)
 #' @param inv_link Custom inverse link function. If provided, numerical integration
 #'   via Gaussian quadrature is used. Use NA if providing link_name instead.
+#'   Must be a vectorized function that accepts a numeric vector and returns
+#'   a numeric vector of the same length.
 #' @return A vector of predicted (fitted) values on the response scale
 #' @export
-pred_base <- function(eta, sigma = NA, link_name = NA, num_nodes = 15,
+pred_base <- function(eta, sigma = rep(0, length(eta)), link_name = NA, num_nodes = 15,
                       inv_link = NA) {
 
   supported_links <- c("identity", "log", "sqrt")
 
+  stopifnot(is.numeric(eta),
+            is.numeric(sigma),
+            length(sigma) == length(eta),
+            is.numeric(num_nodes),
+            length(num_nodes) == 1,
+            length(link_name) == 1,
+            is.na(inv_link) || is.function(inv_link))
+
   n <- length(eta)
-  if (any(is.na(sigma))) {
-    warning("NA values for sigma supplied; setting ALL to zeros (no REs)")
-    sigma <- rep(0, n)
+
+  # At least one node
+  num_nodes <- max(1, floor(num_nodes))
+
+  sig_na <- is.na(sigma)
+  if (any(sig_na)) {
+    warning("NA values for sigma supplied; setting to zeros")
+    sigma[sig_na] <- 0
   }
 
-  if (any(is.na(link_name)) && any(is.na(inv_link))) {
+  if (is.na(link_name) && is.na(inv_link)) {
     stop("Exactly one of link_name and inv_link is needed")
   }
 
   if (!is.na(link_name) && !is.na(inv_link)) {
     if(link_name %in% supported_links) {
       inv_link <- NA
-      warning("link_name and inv_link both supplied; trying to use using link_name")
+      warning("link_name and inv_link both supplied; using supported link_name
+              for speed")
     } else{
       link_name <- NA
       warning("link_name and inv_link both supplied; using inv_link because
@@ -37,7 +55,7 @@ pred_base <- function(eta, sigma = NA, link_name = NA, num_nodes = 15,
     }
   }
 
-  if (length(link_name) == 1 && is.na(link_name)) {
+  if (is.na(link_name)) {
     grid_gauss <- mvQuad::createNIGrid(dim = 1, type = "GHN", level = num_nodes,
                                        level.trans = FALSE)
     nodes <- as.vector(mvQuad::getNodes(grid_gauss))
@@ -80,12 +98,12 @@ pred_base <- function(eta, sigma = NA, link_name = NA, num_nodes = 15,
 #' fit <- glmer(y ~ x + (1|group), data = mydata, family = poisson())
 #' predictions <- pred_glmer(fit)
 #' }
+#' @export
 pred_glmer <- function(fit) {
-  pred <- lme4::getME(fit, "X") %*% lme4::getME(fit, "beta")
-
-  if (inherits(fit, "lmerMod")) {
-    # Do nothing, eta = Xb is prediction
-  } else { # Nonlinear
+  if(inherits(fit, "lmerMod")) {
+    pred <- lme4::getME(fit, "X") %*% lme4::getME(fit, "beta")
+  } else if (inherits(fit, "glmerMod")) {
+    pred <- lme4::getME(fit, "X") %*% lme4::getME(fit, "beta")
     H <- lme4::getME(fit, "Z") %*% lme4::getME(fit, "Lambda")
     sigma <- sqrt(rowSums(H^2))
     pred <- pred_base(eta = pred,
@@ -93,10 +111,11 @@ pred_glmer <- function(fit) {
                       link_name = fit@resp$family$link,
                       inv_link = fit@resp$family$invlink
     )
+  } else{
+    stop("fit must be lmerMod or glmerMod")
   }
   pred
 }
-
 
 #' Calculate predictions for glmmTMB fitted models
 #'
@@ -114,11 +133,14 @@ pred_glmer <- function(fit) {
 #' fit <- glmmTMB(y ~ x + (1|group), data = mydata, family = poisson())
 #' predictions <- pred_glmmtmb(fit)
 #' }
+#' @export
 pred_glmmtmb <- function(fit) {
+  stopifnot(inherits(fit, "glmmTMB"))
+
   VC <- glmmTMB::VarCorr(fit)
 
   # Get lme4 structure
-  re_terms <- lme4::mkReTrms(bars = lme4::findbars(formula(fit)),
+  re_terms <- lme4::mkReTrms(bars = lme4::findbars(stats::formula(fit)),
                              fr = fit$frame,
                              reorder.terms = FALSE # for compatibility w. glmmTMB
                              )
