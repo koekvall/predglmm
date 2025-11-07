@@ -1,9 +1,13 @@
 Package: predglmm
-Title: What the Package Does (One Line, Title Case)
+Title: Marginal Predictions for Generalized Linear Mixed Models
 Version: 0.0.0.9000
 Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
+    person("Karl Oskar", "Ekvall", , "k.o.ekvall@gmail.com", role = c("aut", "cre"))
+Description: Computes marginal predictions (expected values on the response scale) 
+    for generalized linear mixed models fitted with 'lme4' or 'glmmTMB'. 
+    Integrates over the random effects distribution using analytical formulas 
+    when available or Gaussian-Hermite quadrature 
+    for custom link functions.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
