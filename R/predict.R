@@ -1,12 +1,15 @@
 #' Calculate predictions (marginal expectations)
 #'
-#' @param X An n x p matrix of predictors
-#' @param Beta A p-vector of regression coefficients
-#' @param sigma An n-vector of standard deviations for the latent variables,
-#' @param link The inverse link function, currently one of
-#' "identity", "log", or "logit"
+#' @param eta An n-vector of linear predictor values (eta = X %*% beta)
+#' @param sigma An n-vector of standard deviations for the random effects.
+#'   If NA (default), assumes no random effects (sigma = 0).
+#' @param link_name Character string specifying the link function. Currently supports
+#'   "identity", "log", or "sqrt". Use NA if providing a custom inv_link function.
 #' @param num_nodes Number of nodes for Gaussian quadrature used to calculate predictions
-#' @return A vector of predicted (fitted) values
+#'   when using a custom inv_link function (default: 15)
+#' @param inv_link Custom inverse link function. If provided, numerical integration
+#'   via Gaussian quadrature is used. Use NA if providing link_name instead.
+#' @return A vector of predicted (fitted) values on the natural scale
 #' @export
 pred_base <- function(eta, sigma = NA, link_name = NA, num_nodes = 15, inv_link = NA)
 {
@@ -42,7 +45,7 @@ pred_base <- function(eta, sigma = NA, link_name = NA, num_nodes = 15, inv_link 
     # Do nothing; eta is prediction
   } else if(link_name == "log"){
     eta <- exp(eta + 0.5 * sigma^2)
-  } else if(link =="sqrt"){
+  } else if(link_name == "sqrt"){
     eta <- eta^2 + sigma^2
   } else{
     warning("Requested link not implemented; returning NA")
