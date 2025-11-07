@@ -81,7 +81,7 @@ For a GLMM with linear predictor η = Xβ and random effects b ~ N(0, Ψ):
 - **Linear models**: Returns E[Y] = Xβ (no integration needed)
 - **Nonlinear models**: Computes E[g⁻¹(η + Zb)] by integrating over b
 
-For supported links, uses analytical formulas (e.g., E[exp(η + Zb)] = exp(η + σ²/2) for log link). Otherwise, uses Gaussian-Hermite quadrature.
+For supported links, uses analytical formulas (e.g., E[exp(η + Zb)] = exp(η + σ²/2) for log link). Otherwise, uses Gauss-Hermite quadrature.
 
 ## License
 
