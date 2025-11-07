@@ -9,27 +9,28 @@
 #'   when using a custom inv_link function (default: 15)
 #' @param inv_link Custom inverse link function. If provided, numerical integration
 #'   via Gaussian quadrature is used. Use NA if providing link_name instead.
-#' @return A vector of predicted (fitted) values on the natural scale
+#' @return A vector of predicted (fitted) values on the response scale
 #' @export
-pred_base <- function(eta, sigma = NA, link_name = NA, num_nodes = 15, inv_link = NA)
+pred_base <- function(eta, sigma = NA, link_name = NA, num_nodes = 15,
+  inv_link = NA)
 {
   n <- length(eta)
-  if(is.na(sigma)){
+  if (is.na(sigma)) {
     warning("sigma not supplied; setting to zeros (no REs)")
     sigma <- rep(0, n)
   }
 
-  if(is.na(link_name) & is.na(inv_link)){
+  if (is.na(link_name) && is.na(inv_link)) {
     stop("Exactly one of link_name and inv_link is needed")
   }
 
-  if(!is.na(link_name) & !is.na(inv_link)){
+  if (!is.na(link_name) && !is.na(inv_link)) {
     link_name <- NA
     warning("link_name and inv_link both supplied; using inv_link and ignoring
             link_name")
   }
 
-  if(is.na(link_name)){
+  if (is.na(link_name)) {
     grid_gauss <- mvQuad::createNIGrid(dim = 1, type = "GHN", level = num_nodes,
                                        level.trans = FALSE)
     nodes <- as.vector(mvQuad::getNodes(grid_gauss))
@@ -41,13 +42,13 @@ pred_base <- function(eta, sigma = NA, link_name = NA, num_nodes = 15, inv_link 
     W <- inv_link(W)
     W <- t(weights * t(W))
     eta <- rowSums(W)
-  } else if(link_name == "identity"){
+  } else if (link_name == "identity") {
     # Do nothing; eta is prediction
-  } else if(link_name == "log"){
+  } else if (link_name == "log") {
     eta <- exp(eta + 0.5 * sigma^2)
-  } else if(link_name == "sqrt"){
+  } else if (link_name == "sqrt") {
     eta <- eta^2 + sigma^2
-  } else{
+  } else {
     warning("Requested link not implemented; returning NA")
     eta <- rep(NA, n)
   }
@@ -56,15 +57,31 @@ pred_base <- function(eta, sigma = NA, link_name = NA, num_nodes = 15, inv_link 
   eta
 }
 
+#' Calculate predictions for lme4 fitted models
+#'
+#' Computes marginal predictions (expected values) for models fitted with
+#' \code{lme4::glmer} or \code{lme4::lmer}. For linear mixed models (lmerMod),
+#' returns the linear predictor. For generalized linear mixed models (glmerMod),
+#' integrates over random effects to obtain predictions on the response scale.
+#'
+#' @param fit A fitted model object from \code{lme4::glmer} or \code{lme4::lmer}
+#' @return A vector of predicted (fitted) values. For lmerMod, returns X %*% beta.
+#'   For glmerMod, returns marginal expectations on the response scale.
+#' @examples
+#' \dontrun{
+#' library(lme4)
+#' fit <- glmer(y ~ x + (1|group), data = mydata, family = poisson())
+#' predictions <- pred_glmer(fit)
+#' }
 pred_glmer <- function(fit)
 {
   X <- lme4::getME(fit, "X")
   Beta <- lme4::getME(fit, "beta")
   pred <- X %*% Beta
 
-  if(class(fit) == "lmerMod"){
+  if (class(fit) == "lmerMod") {
     # Do nothing, eta = Xb is prediciction
-  } else{ # Nonlinear
+  } else { # Nonlinear
     H <- lme4::getME(fit, "Z") %*% lme4::getME(fit, "Lambda")
     sigma <- sqrt(rowSums(H^2))
     pred <- pred_base(eta = pred, sigma = sigma, link = fit@resp$family$link)
@@ -73,7 +90,22 @@ pred_glmer <- function(fit)
 }
 
 
-
+#' Calculate predictions for glmmTMB fitted models
+#'
+#' Computes marginal predictions (expected values) for models fitted with
+#' \code{glmmTMB::glmmTMB}. Integrates over random effects to obtain predictions
+#' on the response scale. Uses \code{lme4::mkReTrms} to reconstruct the random
+#' effects structure and manually fills the sparse precision matrix from variance
+#' components.
+#'
+#' @param fit A fitted model object from \code{glmmTMB::glmmTMB}
+#' @return A vector of predicted (fitted) values on the response scale
+#' @examples
+#' \dontrun{
+#' library(glmmTMB)
+#' fit <- glmmTMB(y ~ x + (1|group), data = mydata, family = poisson())
+#' predictions <- pred_glmmtmb(fit)
+#' }
 pred_glmmtmb <-function(fit)
 {
   VC <- glmmTMB::VarCorr(fit)
@@ -85,7 +117,7 @@ pred_glmmtmb <-function(fit)
                              )
   # Iterate over grouping factors to fill in covariance matrix elements
   theta <- c()
-  for(ii in 1:length(VC$cond)){
+  for (ii in seq_along(VC$cond)) {
     theta <- c(theta, VC$cond[[ii]][lower.tri(VC$cond[[ii]], diag = T)])
   }
   Psi <- re_terms$Lambdat

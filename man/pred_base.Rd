@@ -22,7 +22,7 @@ when using a custom inv_link function (default: 15)}
 via Gaussian quadrature is used. Use NA if providing link_name instead.}
 }
 \value{
-A vector of predicted (fitted) values on the natural scale
+A vector of predicted (fitted) values on the response scale
 }
 \description{
 Calculate predictions (marginal expectations)
