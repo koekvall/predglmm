@@ -3,7 +3,7 @@
 Marginal predictions (expected values on the response scale) for generalized 
 linear mixed models.
 
-Note: This package has undergone only minimal testing and come with no warranty!
+Note: This package has undergone only minimal testing and comes with no warranty!
 
 ## Overview
 
@@ -23,13 +23,46 @@ or Gaussian-Hermite quadrature.
 
 ```r
 library(lme4)
+library(glmmTMB)
 library(predglmm)
 
-# Fit a Poisson GLMM
-fit <- glmer(y ~ x + (1|group), data = mydata, family = poisson())
-
+# Poisson GLMM (closed form expressions for predictions)
+fit_tmb <- glmmTMB(count ~ mined + (1|site),
+  family=poisson, data=Salamanders)
+fit_lme4 <- glmer(count ~ mined + (1|site),
+  family=poisson, data=Salamanders)
+  
 # Get marginal predictions on the response scale
-predictions <- pred_glmer(fit)
+pred_tmb <- pred_glmmtmb(fit_tmb)
+pred_lme4 <- pred_glmer(fit_lme4)
+
+# Compare predictions
+pred_tmb[1:10]
+pred_lme4[1:10]
+
+# Predictions from usual prediction functions which do not give marginal means:
+predict(fit_tmb, type = "response")[1:10] # REs evaluated at predicted values
+predict(fit_tmb, type = "response", re.form = NA)[1:10] # REs "set to zero"
+
+
+# Logistic GLMM example (using quadrature)
+fit_tmb <- glmmTMB(I(count > 2) ~ mined + (1|site),
+  family=binomial, data=Salamanders)
+
+fit_lme4 <- glmer(I(count > 2) ~ mined + (1|site),
+  family=binomial, data=Salamanders)
+  
+# Get marginal predictions on the response scale
+pred_tmb <- pred_glmmtmb(fit_tmb)
+pred_lme4 <- pred_glmer(fit_lme4)
+
+# Compare predictions
+pred_tmb[1:10]
+pred_lme4[1:10]
+
+# Predictions from usual prediction functions which do not give marginal means:
+predict(fit_tmb, type = "response")[1:10] # REs evaluated at predicted values
+predict(fit_tmb, type = "response", re.form = NA)[1:10] # REs "set to zero"
 ```
 
 Works with models from:

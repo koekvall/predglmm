@@ -13,10 +13,13 @@
 #'   via Gaussian quadrature is used. Use NA if providing link_name instead.
 #'   Must be a vectorized function that accepts a numeric vector and returns
 #'   a numeric vector of the same length.
+#' @param link_warn Logical. If TRUE, shows warnings when both link_name and
+#'   inv_link are provided. Default is FALSE to suppress warnings when called
+#'   from adapter functions that intentionally supply both.
 #' @return A vector of predicted (fitted) values on the response scale
 #' @export
 pred_base <- function(eta, sigma = rep(0, length(eta)), link_name = NA, num_nodes = 15,
-                      inv_link = NA) {
+                      inv_link = NA, link_warn = FALSE) {
 
   supported_links <- c("identity", "log", "sqrt")
 
@@ -26,7 +29,8 @@ pred_base <- function(eta, sigma = rep(0, length(eta)), link_name = NA, num_node
             is.numeric(num_nodes),
             length(num_nodes) == 1,
             length(link_name) == 1,
-            is.na(inv_link) || is.function(inv_link))
+            is.function(inv_link) || is.na(inv_link),
+            is.logical(link_warn) && length(link_warn) == 1)
 
   n <- length(eta)
 
@@ -43,14 +47,16 @@ pred_base <- function(eta, sigma = rep(0, length(eta)), link_name = NA, num_node
     stop("Exactly one of link_name and inv_link is needed")
   }
 
-  if (!is.na(link_name) && !is.na(inv_link)) {
+  if (!is.na(link_name) && is.function(inv_link)) {
     if(link_name %in% supported_links) {
       inv_link <- NA
-      warning("link_name and inv_link both supplied; using supported link_name
+      if(link_warn)
+        warning("link_name and inv_link both supplied; using supported link_name
               for speed")
     } else{
       link_name <- NA
-      warning("link_name and inv_link both supplied; using inv_link because
+      if(link_warn)
+        warning("link_name and inv_link both supplied; using inv_link because
               link_name not implemented")
     }
   }
@@ -101,15 +107,15 @@ pred_base <- function(eta, sigma = rep(0, length(eta)), link_name = NA, num_node
 #' @export
 pred_glmer <- function(fit) {
   if(inherits(fit, "lmerMod")) {
-    pred <- lme4::getME(fit, "X") %*% lme4::getME(fit, "beta")
+    pred <- as.vector(lme4::getME(fit, "X") %*% lme4::getME(fit, "beta"))
   } else if (inherits(fit, "glmerMod")) {
-    pred <- lme4::getME(fit, "X") %*% lme4::getME(fit, "beta")
+    pred <- as.vector(lme4::getME(fit, "X") %*% lme4::getME(fit, "beta"))
     H <- lme4::getME(fit, "Z") %*% lme4::getME(fit, "Lambda")
-    sigma <- sqrt(rowSums(H^2))
+    sigma <- sqrt(apply(H^2, 1, sum))
     pred <- pred_base(eta = pred,
                       sigma = sigma,
                       link_name = fit@resp$family$link,
-                      inv_link = fit@resp$family$invlink
+                      inv_link = fit@resp$family$linkinv
     )
   } else{
     stop("fit must be lmerMod or glmerMod")
@@ -136,7 +142,6 @@ pred_glmer <- function(fit) {
 #' @export
 pred_glmmtmb <- function(fit) {
   stopifnot(inherits(fit, "glmmTMB"))
-
   VC <- glmmTMB::VarCorr(fit)
 
   # Get lme4 structure
@@ -157,11 +162,11 @@ pred_glmmtmb <- function(fit) {
   # Make matrix symmetric
   Psi <- Matrix::forceSymmetric(Psi, uplo = "U")
 
-  sigma <- sqrt(rowSums(crossprod(re_terms$Zt, Psi) * t(re_terms$Zt)))
+  sigma <- sqrt(apply(crossprod(re_terms$Zt, Psi) * Matrix::t(re_terms$Zt), 1, sum))
 
   # Supply both link name and inv link; will use inv link if link_name
   # not supported
-  pred_base(eta = glmmTMB::getME(fit, "X") %*% glmmTMB::getME(fit, "beta"),
+  pred_base(eta = as.vector(glmmTMB::getME(fit, "X") %*% glmmTMB::getME(fit, "beta")),
             sigma = sigma,
             link_name = fit$modelInfo$family$link,
             inv_link = fit$modelInfo$family$linkinv)

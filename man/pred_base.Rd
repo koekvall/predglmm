@@ -9,7 +9,8 @@ pred_base(
   sigma = rep(0, length(eta)),
   link_name = NA,
   num_nodes = 15,
-  inv_link = NA
+  inv_link = NA,
+  link_warn = FALSE
 )
 }
 \arguments{
@@ -30,6 +31,10 @@ when using a custom inv_link function (default: 15)}
 via Gaussian quadrature is used. Use NA if providing link_name instead.
 Must be a vectorized function that accepts a numeric vector and returns
 a numeric vector of the same length.}
+
+\item{link_warn}{Logical. If TRUE, shows warnings when both link_name and
+inv_link are provided. Default is FALSE to suppress warnings when called
+from adapter functions that intentionally supply both.}
 }
 \value{
 A vector of predicted (fitted) values on the response scale
