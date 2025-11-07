@@ -3,6 +3,8 @@
 Marginal predictions (expected values on the response scale) for generalized 
 linear mixed models.
 
+Note: This package has undergone only minimal testing and come with no warranty!
+
 ## Overview
 
 When fitting GLMMs, predictions that account for random effects uncertainty are 
