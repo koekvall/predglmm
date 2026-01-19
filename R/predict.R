@@ -149,6 +149,22 @@ pred_glmmtmb <- function(fit) {
                              fr = fit$frame,
                              reorder.terms = FALSE # for compatibility w. glmmTMB
                              )
+
+  # NOTE ON WHAT THIS FUNCTION IS DOING:
+  # - We use lme4::mkReTrms() only to reconstruct the random effects design matrix
+  #   (Zt) and the indexing (Lind) that describes where parameters live
+  #   in a sparse block-diagonal matrix.
+  # - In lme4, re_terms$Lambdat stores t(Lambda), where Lambda is the Cholesky
+  #   factor of the random effects covariance (Sigma = Lambda %*% t(Lambda)).
+  # - Here we are *not* using lme4's Lambda values. Instead, we overwrite the
+  #   nonzero entries of this sparse matrix with the corresponding entries from
+  #   glmmTMB's estimated covariance blocks (VarCorr). After forceSymmetric(),
+  #   Psi is a covariance matrix for the stacked random effects U.
+  # - Given Psi = Cov(U), the per-observation SD of the random effect contribution
+  #   to the linear predictor is:
+  #       sigma_i = sqrt( Var( z_i^T U ) ) = sqrt( (Z Psi Z^T)_{ii} )
+  #   which is computed below.
+  
   # Iterate over grouping factors to fill in covariance matrix elements
   theta <- c()
   for (ii in seq_along(VC$cond)) {
@@ -162,6 +178,9 @@ pred_glmmtmb <- function(fit) {
   # Make matrix symmetric
   Psi <- Matrix::forceSymmetric(Psi, uplo = "U")
 
+  # sigma is the SD of the aggregated random effect contribution on the *linear*
+  # predictor scale for each observation; pred_base() then integrates over that
+  # normal variability to return a marginal mean on the response scale.
   sigma <- sqrt(apply(crossprod(re_terms$Zt, Psi) * Matrix::t(re_terms$Zt), 1, sum))
 
   # Supply both link name and inv link; will use inv link if link_name
