@@ -123,6 +123,68 @@ pred_glmer <- function(fit) {
   pred
 }
 
+#' Calculate predictions for nlme fitted models
+#'
+#' Computes marginal predictions (expected values) for models fitted with
+#' \code{nlme::lme} or \code{nlme::nlme}. For linear mixed models (\code{lme}),
+#' the marginal prediction is simply the fixed-effects linear predictor
+#' X \%*\% beta. For nonlinear mixed models (\code{nlme}), marginal predictions
+#' are computed by Monte Carlo integration over the random effects distribution.
+#'
+#' @param fit A fitted model object from \code{nlme::lme} or \code{nlme::nlme}
+#' @param nsim Number of Monte Carlo samples for nonlinear models (default:
+#'   1000). Ignored for linear models.
+#' @return A vector of predicted (fitted) values on the response scale.
+#' @importFrom stats model.matrix formula
+#' @examples
+#' \dontrun{
+#' library(nlme)
+#' # Linear mixed model
+#' fit_lme <- lme(distance ~ age, random = ~ 1 | Subject, data = Orthodont)
+#' pred_nlme(fit_lme)
+#'
+#' # Nonlinear mixed model
+#' fit_nlme <- nlme(height ~ SSasymp(age, Asym, R0, lrc),
+#'                  fixed = Asym + R0 + lrc ~ 1,
+#'                  random = Asym ~ 1 | Seed,
+#'                  data = Loblolly)
+#' pred_nlme(fit_nlme, nsim = 2000)
+#' }
+#' @export
+pred_nlme <- function(fit, nsim = 1000) {
+  if (inherits(fit, "nlme")) {
+    # Nonlinear mixed model: Monte Carlo integration over random effects
+    model_rhs <- formula(fit)[[3]]
+    beta <- nlme::fixef(fit)
+    d <- nlme::getData(fit)
+
+    # Extract random effects covariance (scaled by sigma^2)
+    Psi <- as.matrix(fit$modelStruct$reStruct[[1]]) * fit$sigma^2
+    re_names <- colnames(Psi)
+    q <- ncol(Psi)
+    L <- t(chol(Psi))
+    n <- nrow(d)
+
+    pred_sum <- rep(0, n)
+    for (s in seq_len(nsim)) {
+      b <- as.vector(L %*% stats::rnorm(q))
+      params <- beta
+      params[re_names] <- params[re_names] + b
+      env <- c(as.list(as.data.frame(d)), as.list(params))
+      pred_sum <- pred_sum + eval(model_rhs, envir = env)
+    }
+    pred_sum / nsim
+
+  } else if (inherits(fit, "lme")) {
+    # Linear mixed model: marginal prediction is X %*% beta
+    X <- model.matrix(fit, data = fit$data)
+    beta <- nlme::fixef(fit)
+    as.vector(X %*% beta)
+  } else {
+    stop("fit must be of class lme or nlme")
+  }
+}
+
 #' Calculate predictions for glmmTMB fitted models
 #'
 #' Computes marginal predictions (expected values) for models fitted with

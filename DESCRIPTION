@@ -4,16 +4,23 @@ Version: 0.0.0.9000
 Authors@R: 
     person("Karl Oskar", "Ekvall", , "k.o.ekvall@gmail.com", role = c("aut", "cre"))
 Description: Computes marginal predictions (expected values on the response scale) 
-    for generalized linear mixed models fitted with 'lme4' or 'glmmTMB'. 
+    for generalized linear mixed models fitted with 'lme4', 'glmmTMB', or 'nlme'.
     Integrates over the random effects distribution using analytical formulas 
     when available or Gaussian-Hermite quadrature 
     for custom link functions.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3
 Imports:
     lme4,
     glmmTMB,
     mvQuad,
-    Matrix
+    Matrix,
+    nlme
+Suggests: 
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+VignetteBuilder: knitr

@@ -1,0 +1,261 @@
+---
+title: "Marginal Predictions for GLMMs with predglmm"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Marginal Predictions for GLMMs with predglmm}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 4
+)
+```
+
+## Introduction
+
+Standard predict methods for generalized linear mixed models return either
+conditional predictions (using estimated random effects) or predictions with
+random effects set to zero. Neither of these is the marginal mean
+$E(Y_i \mid X_i)$, which averages over the random effects distribution:
+$$
+E(Y_i \mid X_i) = \int h(\eta_i + z_i^\top b) \, \varphi(b; 0, \Psi) \, db,
+$$
+where $h$ is the inverse link function, $\eta_i = x_i^\top \beta$ is the
+linear predictor, $z_i$ is the random effects design vector for observation
+$i$, and $\varphi(\cdot; 0, \Psi)$ is the density of the random effects.
+
+When $h$ is nonlinear, $E[h(\eta + z^\top b)] \neq h(\eta)$ by Jensen's
+inequality. The `predglmm` package computes the correct marginal mean.
+
+For common link functions, the integral has a closed form:
+
+- **Identity link** ($h(x) = x$): $E(Y_i \mid X_i) = \eta_i$.
+- **Log link** ($h(x) = e^x$): $E(Y_i \mid X_i) = \exp(\eta_i + \sigma_i^2 / 2)$,
+  where $\sigma_i^2 = z_i^\top \Psi \, z_i$.
+- **Square-root link** ($h(x) = x^2$): $E(Y_i \mid X_i) = \eta_i^2 + \sigma_i^2$.
+
+For other link functions, the package uses Gauss--Hermite quadrature.
+
+## Example: Poisson GLMM with square-root link
+
+We simulate data from a Poisson GLMM inspired by a behavioral experiment.
+The design has four treatment groups, three experimental phases, and nine
+time bins per phase. Subjects are observed once per bin, giving 27
+observations per subject. The fixed effects allow separate mean functions
+for each group--phase combination with polynomial time trends. The random
+effects include correlated phase-specific intercepts per subject and
+observation-level intercepts to capture overdispersion.
+
+```{r simulate}
+library(predglmm)
+library(glmmTMB)
+library(lme4)
+library(ggplot2)
+
+set.seed(42)
+
+n_per_group <- 50
+n_groups <- 4
+n_subjects <- n_groups * n_per_group
+n_phases <- 3
+n_bins <- 9
+
+# Design
+subject <- factor(rep(1:n_subjects, each = n_phases * n_bins))
+group <- factor(rep(rep(1:n_groups, each = n_per_group),
+                    each = n_phases * n_bins))
+phase <- factor(rep(rep(1:n_phases, each = n_bins), n_subjects))
+bin <- rep(rep(1:n_bins, n_phases), n_subjects)
+
+d <- data.frame(subject, group, phase, bin)
+
+# Fixed effects on the sqrt scale:
+# Group baselines
+mu_group <- c(1.1, 1.4, 0.9, 1.0)
+# Phase shifts
+phase_shift <- c(0, 4.0, 0.9)
+# Time trend (linear in log-bin)
+time_slope <- c(-0.3, 0.5, -0.2)
+
+d$eta <- mu_group[d$group] + phase_shift[d$phase] +
+  time_slope[d$phase] * log(d$bin)
+
+# Correlated random effects per subject (one per phase)
+Psi <- matrix(c(
+   0.59, -0.59, -0.33,
+  -0.59,  1.75,  0.74,
+  -0.33,  0.74,  0.92
+), 3, 3)
+L <- t(chol(Psi))
+b <- matrix(rnorm(n_subjects * 3), nrow = 3)
+b <- L %*% b  # 3 x n_subjects
+
+# Map subject RE to observations
+b_obs_re <- numeric(nrow(d))
+for (i in 1:nrow(d)) {
+  b_obs_re[i] <- b[d$phase[i], d$subject[i]]
+}
+
+# Observation-level RE
+sigma_obs <- 0.87
+e <- rnorm(nrow(d), sd = sigma_obs)
+
+# Response (sqrt link: mu = eta^2)
+d$eta_full <- d$eta + b_obs_re + e
+d$y <- rpois(nrow(d), lambda = pmax(d$eta_full^2, 0))
+d$obs <- factor(1:nrow(d))
+```
+
+### Fitting the model
+
+We fit the model with `glmmTMB`. The fixed effects specify separate group
+and phase intercepts with a polynomial trend in log-time within each
+phase--group combination. The random effects include correlated
+phase-specific intercepts per subject and observation-level intercepts.
+
+```{r fit-glmmtmb, cache = TRUE}
+fit_tmb <- glmmTMB(
+  y ~ 0 + group * phase * log(bin) + (0 + phase | subject) + (1 | obs),
+  family = poisson(link = "sqrt"),
+  data = d
+)
+```
+
+### Computing marginal predictions
+
+The `pred_glmmtmb` function extracts the fixed effects, random effects
+design, and variance components from the fitted model, then computes the
+marginal mean.
+
+```{r predictions}
+d$marginal <- pred_glmmtmb(fit_tmb)
+d$zero_re <- predict(fit_tmb, type = "response", re.form = NA)
+d$conditional <- predict(fit_tmb, type = "response")
+```
+
+### Visualization
+
+We compare the three prediction types, averaged over subjects within each
+group--phase--bin combination.
+
+```{r plot-comparison, fig.width = 8, fig.height = 5}
+comp <- aggregate(
+  cbind(marginal, zero_re, conditional, y) ~ group + phase + bin,
+  data = d, FUN = mean
+)
+
+comp_long <- reshape(comp,
+  varying = c("marginal", "zero_re", "conditional", "y"),
+  v.names = "value",
+  timevar = "type",
+  times = c("Marginal", "Zero RE", "Conditional", "Observed"),
+  direction = "long"
+)
+comp_long$type <- factor(comp_long$type,
+  levels = c("Observed", "Marginal", "Zero RE", "Conditional"))
+
+# Continuous time axis across phases
+comp_long$time <- (as.numeric(comp_long$phase) - 1) * n_bins + comp_long$bin
+
+ggplot(comp_long, aes(x = time, y = value,
+                      color = type, linetype = type)) +
+  geom_line(data = subset(comp_long, type != "Observed"), linewidth = 0.6) +
+  geom_point(size = 1.5, data = subset(comp_long, type == "Observed")) +
+  facet_wrap(~ group,
+    labeller = labeller(group = function(x) paste("Group", x))) +
+  scale_color_manual(values = c(
+    "Observed" = "black",
+    "Marginal" = "#2166ac",
+    "Zero RE" = "#d6604d",
+    "Conditional" = "#bababa"
+  )) +
+  scale_linetype_manual(values = c(
+    "Observed" = "blank",
+    "Marginal" = "solid",
+    "Zero RE" = "dashed",
+    "Conditional" = "dotted"
+  )) +
+  geom_vline(xintercept = c(9.5, 18.5), linetype = "solid",
+             color = "gray70") +
+  labs(x = "Time bin", y = "Rate", color = NULL, linetype = NULL) +
+  theme_bw(base_size = 10) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+The marginal predictions (blue, solid) are consistently larger than the
+zero-RE predictions (red, dashed). This gap reflects Jensen's inequality:
+since the square-root link is convex, ignoring the random effects variance
+leads to systematic underestimation. The conditional predictions
+(gray, dotted) average out to the marginal curve because they incorporate
+estimated random effects for each subject.
+
+### Cross-validation with lme4
+
+```{r fit-lme4, cache = TRUE}
+fit_lme4 <- glmer(
+  y ~ 0 + group * phase * log(bin) + (0 + phase | subject) + (1 | obs),
+  family = poisson(link = "sqrt"),
+  data = d
+)
+```
+
+```{r compare-packages}
+d$marginal_lme4 <- pred_glmer(fit_lme4)
+summary(d$marginal - d$marginal_lme4)
+```
+
+## Nonlinear mixed models with nlme
+
+For nonlinear mixed models fit with `nlme`, the random effects enter the
+model function directly as parameters. There is no link function; the
+mean is a nonlinear function $f(x_i, \beta + b_i)$. The marginal mean is
+$$
+E(Y_i \mid X_i) = \int f(x_i, \beta + b) \, \varphi(b; 0, \Psi) \, db.
+$$
+
+The `pred_nlme` function computes this by Monte Carlo integration.
+
+```{r nlme-example}
+library(nlme)
+
+fit_nlme <- nlme(
+  height ~ SSasymp(age, Asym, R0, lrc),
+  fixed = Asym + R0 + lrc ~ 1,
+  random = Asym ~ 1 | Seed,
+  data = Loblolly
+)
+
+set.seed(1)
+pred_marginal <- pred_nlme(fit_nlme, nsim = 5000)
+pred_population <- as.numeric(predict(fit_nlme, level = 0))
+```
+
+Here the random effect is on `Asym`, which enters linearly. Jensen's
+inequality does not apply, so the marginal and population predictions
+coincide:
+
+```{r nlme-linear}
+summary(pred_marginal - pred_population)
+```
+
+When the random effect is on a nonlinear parameter, the two diverge:
+
+```{r nlme-nonlinear}
+fit_nlme2 <- nlme(
+  height ~ SSasymp(age, Asym, R0, lrc),
+  fixed = Asym + R0 + lrc ~ 1,
+  random = lrc ~ 1 | Seed,
+  data = Loblolly
+)
+
+set.seed(1)
+pred_marginal2 <- pred_nlme(fit_nlme2, nsim = 5000)
+pred_population2 <- as.numeric(predict(fit_nlme2, level = 0))
+
+summary(pred_marginal2 - pred_population2)
+```

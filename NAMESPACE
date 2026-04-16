@@ -3,3 +3,6 @@
 export(pred_base)
 export(pred_glmer)
 export(pred_glmmtmb)
+export(pred_nlme)
+importFrom(stats,formula)
+importFrom(stats,model.matrix)
