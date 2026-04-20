@@ -110,8 +110,11 @@ pred_glmer <- function(fit) {
     pred <- as.vector(lme4::getME(fit, "X") %*% lme4::getME(fit, "beta"))
   } else if (inherits(fit, "glmerMod")) {
     pred <- as.vector(lme4::getME(fit, "X") %*% lme4::getME(fit, "beta"))
+    # H = Z %*% Lambda, so diag(H H^T) = diag(Z Sigma Z^T) gives Var(z_i^T b)
+    # per observation. rowSums on a sparse matrix avoids the dense coercion
+    # that apply(., 1, sum) would force.
     H <- lme4::getME(fit, "Z") %*% lme4::getME(fit, "Lambda")
-    sigma <- sqrt(apply(H^2, 1, sum))
+    sigma <- sqrt(Matrix::rowSums(H^2))
     pred <- pred_base(eta = pred,
                       sigma = sigma,
                       link_name = fit@resp$family$link,
@@ -243,7 +246,11 @@ pred_glmmtmb <- function(fit) {
   # sigma is the SD of the aggregated random effect contribution on the *linear*
   # predictor scale for each observation; pred_base() then integrates over that
   # normal variability to return a marginal mean on the response scale.
-  sigma <- sqrt(apply(crossprod(re_terms$Zt, Psi) * Matrix::t(re_terms$Zt), 1, sum))
+  # We want sigma_i^2 = z_i^T Psi z_i where z_i = Zt[, i]. Computing it as
+  # colSums(Zt * (Psi %*% Zt)) keeps everything sparse and avoids forming the
+  # n x n product (Z Psi Z^T) that the previous apply(., 1, sum) would coerce
+  # to a dense matrix.
+  sigma <- sqrt(Matrix::colSums(re_terms$Zt * (Psi %*% re_terms$Zt)))
 
   # Supply both link name and inv link; will use inv link if link_name
   # not supported
