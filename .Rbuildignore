@@ -3,3 +3,8 @@
 ^LICENSE\.md$
 ^doc$
 ^Meta$
+^\.github$
+^\.DS_Store$
+^sim_nlme\.R$
+^sim_mse\.pdf$
+^vignettes/predglmm_files$
