@@ -4,13 +4,17 @@
 \alias{pred_nlme}
 \title{Calculate predictions for nlme fitted models}
 \usage{
-pred_nlme(fit, nsim = 1000)
+pred_nlme(fit, nsim = 1000, seed = NULL)
 }
 \arguments{
-\item{fit}{A fitted model object from \code{nlme::lme} or \code{nlme::nlme}}
+\item{fit}{A fitted model object from \code{nlme::lme} or \code{nlme::nlme}.}
 
 \item{nsim}{Number of Monte Carlo samples for nonlinear models (default:
 1000). Ignored for linear models.}
+
+\item{seed}{Optional integer seed. If supplied, the RNG state is restored
+on exit so the call does not pollute the global stream. Ignored for
+linear models.}
 }
 \value{
 A vector of predicted (fitted) values on the response scale.
@@ -21,6 +25,14 @@ Computes marginal predictions (expected values) for models fitted with
 the marginal prediction is simply the fixed-effects linear predictor
 X \\%*\\% beta. For nonlinear mixed models (\code{nlme}), marginal predictions
 are computed by Monte Carlo integration over the random effects distribution.
+}
+\details{
+For nonlinear fits with nested or crossed grouping factors (multiple entries
+in \code{fit$modelStruct$reStruct}), the per-parameter random-effect
+contribution at each observation is a sum of independent draws across
+grouping levels, so the marginal distribution has covariance equal to the
+sum of per-level covariances (indexed by parameter name). The Monte Carlo
+draws use this combined covariance.
 }
 \examples{
 \dontrun{
@@ -34,6 +46,6 @@ fit_nlme <- nlme(height ~ SSasymp(age, Asym, R0, lrc),
                  fixed = Asym + R0 + lrc ~ 1,
                  random = Asym ~ 1 | Seed,
                  data = Loblolly)
-pred_nlme(fit_nlme, nsim = 2000)
+pred_nlme(fit_nlme, nsim = 2000, seed = 1)
 }
 }

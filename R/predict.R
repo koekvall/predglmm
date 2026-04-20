@@ -134,9 +134,19 @@ pred_glmer <- function(fit) {
 #' X \%*\% beta. For nonlinear mixed models (\code{nlme}), marginal predictions
 #' are computed by Monte Carlo integration over the random effects distribution.
 #'
-#' @param fit A fitted model object from \code{nlme::lme} or \code{nlme::nlme}
+#' For nonlinear fits with nested or crossed grouping factors (multiple entries
+#' in \code{fit$modelStruct$reStruct}), the per-parameter random-effect
+#' contribution at each observation is a sum of independent draws across
+#' grouping levels, so the marginal distribution has covariance equal to the
+#' sum of per-level covariances (indexed by parameter name). The Monte Carlo
+#' draws use this combined covariance.
+#'
+#' @param fit A fitted model object from \code{nlme::lme} or \code{nlme::nlme}.
 #' @param nsim Number of Monte Carlo samples for nonlinear models (default:
 #'   1000). Ignored for linear models.
+#' @param seed Optional integer seed. If supplied, the RNG state is restored
+#'   on exit so the call does not pollute the global stream. Ignored for
+#'   linear models.
 #' @return A vector of predicted (fitted) values on the response scale.
 #' @importFrom stats model.matrix formula
 #' @examples
@@ -151,35 +161,76 @@ pred_glmer <- function(fit) {
 #'                  fixed = Asym + R0 + lrc ~ 1,
 #'                  random = Asym ~ 1 | Seed,
 #'                  data = Loblolly)
-#' pred_nlme(fit_nlme, nsim = 2000)
+#' pred_nlme(fit_nlme, nsim = 2000, seed = 1)
 #' }
 #' @export
-pred_nlme <- function(fit, nsim = 1000) {
+pred_nlme <- function(fit, nsim = 1000, seed = NULL) {
   if (inherits(fit, "nlme")) {
-    # Nonlinear mixed model: Monte Carlo integration over random effects
+    # Nonlinear mixed model: Monte Carlo integration over random effects.
     model_rhs <- formula(fit)[[3]]
     beta <- nlme::fixef(fit)
     d <- nlme::getData(fit)
+    if (is.null(d)) {
+      stop("Could not retrieve original data via nlme::getData(fit). ",
+           "Refit with the data argument or save the data alongside the fit.")
+    }
 
-    # Extract random effects covariance (scaled by sigma^2)
-    Psi <- as.matrix(fit$modelStruct$reStruct[[1]]) * fit$sigma^2
-    re_names <- colnames(Psi)
-    q <- ncol(Psi)
+    # Combine RE covariances across grouping levels into a single Psi.
+    # nlme parameterizes reStruct[[k]] in units of the residual SD, so multiply
+    # by sigma^2 to recover the covariance on the response scale. Per-parameter
+    # contributions across nested or crossed levels are independent, so the
+    # combined marginal covariance is the name-indexed sum of per-level Psi.
+    re_struct <- fit$modelStruct$reStruct
+    re_names <- unique(unlist(lapply(re_struct,
+                                     function(p) colnames(as.matrix(p)))))
+    q <- length(re_names)
+    Psi <- matrix(0, q, q, dimnames = list(re_names, re_names))
+    for (k in seq_along(re_struct)) {
+      Pk <- as.matrix(re_struct[[k]]) * fit$sigma^2
+      nm <- colnames(Pk)
+      Psi[nm, nm] <- Psi[nm, nm] + Pk
+    }
+
+    missing_re <- setdiff(re_names, names(beta))
+    if (length(missing_re) > 0) {
+      stop("Random-effect parameter names not found in fixef(): ",
+           paste(missing_re, collapse = ", "))
+    }
+
     L <- t(chol(Psi))
     n <- nrow(d)
+
+    # Restore the global RNG state on exit so a user-supplied seed does not
+    # change the stream seen by subsequent code.
+    if (!is.null(seed)) {
+      if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+        old_seed <- get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+        on.exit(assign(".Random.seed", old_seed, envir = .GlobalEnv),
+                add = TRUE)
+      } else {
+        on.exit(rm(".Random.seed", envir = .GlobalEnv), add = TRUE)
+      }
+      set.seed(seed)
+    }
+
+    # Evaluate inside the formula's environment so user-defined model
+    # functions (e.g., custom self-starters) are still in scope.
+    enclos <- environment(formula(fit))
+    if (is.null(enclos)) enclos <- parent.frame()
+    data_list <- as.list(as.data.frame(d))
 
     pred_sum <- rep(0, n)
     for (s in seq_len(nsim)) {
       b <- as.vector(L %*% stats::rnorm(q))
       params <- beta
       params[re_names] <- params[re_names] + b
-      env <- c(as.list(as.data.frame(d)), as.list(params))
-      pred_sum <- pred_sum + eval(model_rhs, envir = env)
+      env <- c(data_list, as.list(params))
+      pred_sum <- pred_sum + eval(model_rhs, envir = env, enclos = enclos)
     }
     pred_sum / nsim
 
   } else if (inherits(fit, "lme")) {
-    # Linear mixed model: marginal prediction is X %*% beta
+    # Linear mixed model: marginal prediction is X %*% beta.
     X <- model.matrix(fit, data = fit$data)
     beta <- nlme::fixef(fit)
     as.vector(X %*% beta)
