@@ -144,7 +144,7 @@ boot_pred <- function(fit, statistic = NULL, n_boot = 1000, level = 0.95,
   q <- length(estimate)
 
   # Restore the global RNG state on exit so a user-supplied seed does not
-  # change the stream seen by subsequent code (same pattern as pred_nlme).
+  # change the stream seen by subsequent code.
   # Restoring .Random.seed also restores the RNG kind, which is switched to
   # L'Ecuyer-CMRG below so that parallel streams are reproducible.
   if (!is.null(seed)) {
