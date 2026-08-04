@@ -43,7 +43,8 @@ pred_base <- function(eta, sigma = rep(0, length(eta)), link_name = NA, num_node
     sigma[sig_na] <- 0
   }
 
-  if (is.na(link_name) && is.na(inv_link)) {
+  # is.na() on a function warns, so test is.function() first
+  if (is.na(link_name) && !is.function(inv_link)) {
     stop("Exactly one of link_name and inv_link is needed")
   }
 
@@ -114,7 +115,8 @@ pred_glmer <- function(fit) {
     # per observation. rowSums on a sparse matrix avoids the dense coercion
     # that apply(., 1, sum) would force.
     H <- lme4::getME(fit, "Z") %*% lme4::getME(fit, "Lambda")
-    sigma <- sqrt(Matrix::rowSums(H^2))
+    # unname() so predictions do not inherit observation names
+    sigma <- unname(sqrt(Matrix::rowSums(H^2)))
     pred <- pred_base(eta = pred,
                       sigma = sigma,
                       link_name = fit@resp$family$link,
@@ -239,75 +241,156 @@ pred_nlme <- function(fit, nsim = 1000, seed = NULL) {
   }
 }
 
+#' Per-observation SD of the random-effect contribution to a linear predictor
+#'
+#' Internal helper shared by the conditional and zero-inflation components of
+#' \code{pred_glmmtmb}. Uses \code{reformulas::mkReTrms} only to reconstruct the
+#' random-effects design matrix (Zt) and the indexing (Lind) describing where
+#' parameters live in a sparse block-diagonal matrix; the nonzero entries of
+#' that matrix are then overwritten with glmmTMB's estimated covariance blocks
+#' (a VarCorr component), so after forceSymmetric() Psi is the covariance of
+#' the stacked random effects U. Given Psi = Cov(U), the per-observation SD is
+#' sigma_i = sqrt(Var(z_i^T U)) = sqrt((Z Psi Z^T)_{ii}).
+#'
+#' @param form Formula whose bars define the random effects (the conditional
+#'   formula or the zi formula).
+#' @param fr Model frame containing the grouping variables.
+#' @param vc Corresponding component of \code{glmmTMB::VarCorr(fit)} (a list of
+#'   covariance blocks).
+#' @return An n-vector of SDs; zeros if the formula has no random effects.
+#' @noRd
+re_sd_glmmtmb <- function(form, fr, vc) {
+  bars <- reformulas::findbars(form)
+  if (is.null(bars)) return(rep(0, nrow(fr)))
+  re_terms <- reformulas::mkReTrms(bars = bars,
+                             fr = fr,
+                             reorder.terms = FALSE # for compatibility w. glmmTMB
+                             )
+
+  # Iterate over grouping factors to fill in covariance matrix elements
+  theta <- c()
+  for (ii in seq_along(vc)) {
+    theta <- c(theta, vc[[ii]][lower.tri(vc[[ii]], diag = TRUE)])
+  }
+  Psi <- re_terms$Lambdat
+
+  # Fill in the upper triangular part of Psi with the extracted elements,
+  # then symmetrize
+  Psi@x <- theta[re_terms$Lind]
+  Psi <- Matrix::forceSymmetric(Psi, uplo = "U")
+
+  # sigma_i^2 = z_i^T Psi z_i with z_i = Zt[, i]. colSums(Zt * (Psi %*% Zt))
+  # keeps everything sparse and avoids forming the dense n x n product
+  # Z Psi Z^T. unname() so predictions do not inherit observation names.
+  unname(sqrt(Matrix::colSums(re_terms$Zt * (Psi %*% re_terms$Zt))))
+}
+
 #' Calculate predictions for glmmTMB fitted models
 #'
 #' Computes marginal predictions (expected values) for models fitted with
-#' \code{glmmTMB::glmmTMB}. Integrates over random effects to obtain predictions
-#' on the response scale. Uses \code{lme4::mkReTrms} to reconstruct the random
-#' effects structure and manually fills the sparse precision matrix from variance
-#' components.
+#' \code{glmmTMB::glmmTMB}, integrating over the random effects in the
+#' conditional model and, when present, in the zero-inflation model.
+#'
+#' For zero-inflated fits, \code{type = "response"} (the default) returns the
+#' marginal mean of the response, (1 - pi_i) * mu_i, where pi_i is the
+#' zero-inflation probability marginalized over any zi random effects and mu_i
+#' the conditional-component mean marginalized over the conditional random
+#' effects; \code{type = "conditional"} returns mu_i alone. For truncated
+#' families (\code{truncated_poisson}, \code{truncated_nbinom1},
+#' \code{truncated_nbinom2}) the conditional-component mean accounts for the
+#' zero truncation, which requires the dispersion parameter, so those families
+#' are supported only with constant dispersion (\code{dispformula = ~1}).
 #'
 #' @param fit A fitted model object from \code{glmmTMB::glmmTMB}
+#' @param type \code{"response"} for the marginal mean of the response
+#'   (includes the zero-inflation factor), \code{"conditional"} for the
+#'   marginal mean of the conditional component only. Identical when the model
+#'   has no zero inflation.
+#' @param num_nodes Number of Gauss--Hermite nodes used whenever a component
+#'   requires numerical integration (default: 15)
 #' @return A vector of predicted (fitted) values on the response scale
 #' @examples
 #' \dontrun{
 #' library(glmmTMB)
 #' fit <- glmmTMB(y ~ x + (1|group), data = mydata, family = poisson())
 #' predictions <- pred_glmmtmb(fit)
+#' # Hurdle model: marginal mean including the zero component
+#' fit2 <- glmmTMB(y ~ x + (1|group), ziformula = ~ x,
+#'                 family = truncated_poisson, data = mydata)
+#' predictions2 <- pred_glmmtmb(fit2)
 #' }
 #' @export
-pred_glmmtmb <- function(fit) {
+pred_glmmtmb <- function(fit, type = c("response", "conditional"),
+                         num_nodes = 15) {
   stopifnot(inherits(fit, "glmmTMB"))
+  type <- match.arg(type)
   VC <- glmmTMB::VarCorr(fit)
+  fam <- fit$modelInfo$family
 
-  # Get lme4 structure
-  re_terms <- lme4::mkReTrms(bars = lme4::findbars(stats::formula(fit)),
-                             fr = fit$frame,
-                             reorder.terms = FALSE # for compatibility w. glmmTMB
-                             )
+  # Conditional component: eta and per-observation RE standard deviation.
+  # Use fixef()$cond rather than getME(fit, "beta"): for families with a
+  # dispersion parameter (e.g. nbinom1/nbinom2), getME appends it to beta,
+  # making the product with X non-conformable.
+  eta <- as.vector(glmmTMB::getME(fit, "X") %*% glmmTMB::fixef(fit)$cond)
+  sigma <- re_sd_glmmtmb(stats::formula(fit), fit$frame, VC$cond)
 
-  # NOTE ON WHAT THIS FUNCTION IS DOING:
-  # - We use lme4::mkReTrms() only to reconstruct the random effects design matrix
-  #   (Zt) and the indexing (Lind) that describes where parameters live
-  #   in a sparse block-diagonal matrix.
-  # - In lme4, re_terms$Lambdat stores t(Lambda), where Lambda is the Cholesky
-  #   factor of the random effects covariance (Sigma = Lambda %*% t(Lambda)).
-  # - Here we are *not* using lme4's Lambda values. Instead, we overwrite the
-  #   nonzero entries of this sparse matrix with the corresponding entries from
-  #   glmmTMB's estimated covariance blocks (VarCorr). After forceSymmetric(),
-  #   Psi is a covariance matrix for the stacked random effects U.
-  # - Given Psi = Cov(U), the per-observation SD of the random effect contribution
-  #   to the linear predictor is:
-  #       sigma_i = sqrt( Var( z_i^T U ) ) = sqrt( (Z Psi Z^T)_{ii} )
-  #   which is computed below.
-  
-  # Iterate over grouping factors to fill in covariance matrix elements
-  theta <- c()
-  for (ii in seq_along(VC$cond)) {
-    theta <- c(theta, VC$cond[[ii]][lower.tri(VC$cond[[ii]], diag = TRUE)])
+  trunc_families <- c("truncated_poisson", "truncated_nbinom1",
+                      "truncated_nbinom2")
+  if (fam$family %in% trunc_families) {
+    # The zero-truncated mean is mu / (1 - P(0)), a per-family transform of
+    # the untruncated mean mu = linkinv(eta + u); it has no closed-form
+    # normal integral, so always integrate by quadrature. P(0) depends on the
+    # dispersion parameter, which must be a scalar for the transform below.
+    if (!identical(deparse(fit$modelInfo$allForm$dispformula), "~1")) {
+      stop("truncated families are supported only with constant dispersion ",
+           "(dispformula = ~1)")
+    }
+    disp <- glmmTMB::sigma(fit)
+    trunc_mean <- switch(fam$family,
+      # P(0) = exp(-mu); -expm1() keeps 1 - P(0) accurate for small mu
+      truncated_poisson = function(x) {
+        mu <- fam$linkinv(x)
+        mu / (-expm1(-mu))
+      },
+      # nbinom1: Var = mu * (1 + phi), i.e. NB with size mu / phi, so
+      # P(0) = (1 + phi)^(-mu / phi)
+      truncated_nbinom1 = function(x) {
+        mu <- fam$linkinv(x)
+        mu / (-expm1(-(mu / disp) * log1p(disp)))
+      },
+      # nbinom2: Var = mu * (1 + mu / theta), size theta, so
+      # P(0) = (theta / (theta + mu))^theta
+      truncated_nbinom2 = function(x) {
+        mu <- fam$linkinv(x)
+        mu / (-expm1(disp * (log(disp) - log(disp + mu))))
+      })
+    pred <- pred_base(eta = eta, sigma = sigma, link_name = NA,
+                      num_nodes = num_nodes, inv_link = trunc_mean)
+  } else {
+    # Supply both link name and inv link; pred_base uses the inv link with
+    # quadrature if link_name is not supported analytically
+    pred <- pred_base(eta = eta, sigma = sigma,
+                      link_name = fam$link,
+                      num_nodes = num_nodes,
+                      inv_link = fam$linkinv)
   }
-  Psi <- re_terms$Lambdat
 
-  # Fill in the upper triangular part of Psi with the extracted elements
-  Psi@x <- theta[re_terms$Lind]
+  # Zero-inflation factor: E[Y] = (1 - pi) * mu with pi and mu marginalized
+  # over their (independent) random effects. glmmTMB's zi link is always
+  # logit; with zi random effects the logit-normal mean has no closed form,
+  # so integrate by quadrature.
+  ziform <- fit$modelInfo$allForm$ziformula
+  if (type == "response" && !identical(deparse(ziform), "~0")) {
+    eta_zi <- as.vector(glmmTMB::getME(fit, "Xzi") %*% glmmTMB::fixef(fit)$zi)
+    sigma_zi <- re_sd_glmmtmb(ziform, fit$frame, VC$zi)
+    if (all(sigma_zi == 0)) {
+      p_zi <- stats::plogis(eta_zi)
+    } else {
+      p_zi <- pred_base(eta = eta_zi, sigma = sigma_zi, link_name = NA,
+                        num_nodes = num_nodes, inv_link = stats::plogis)
+    }
+    pred <- (1 - p_zi) * pred
+  }
 
-  # Make matrix symmetric
-  Psi <- Matrix::forceSymmetric(Psi, uplo = "U")
-
-  # sigma is the SD of the aggregated random effect contribution on the *linear*
-  # predictor scale for each observation; pred_base() then integrates over that
-  # normal variability to return a marginal mean on the response scale.
-  # We want sigma_i^2 = z_i^T Psi z_i where z_i = Zt[, i]. Computing it as
-  # colSums(Zt * (Psi %*% Zt)) keeps everything sparse and avoids forming the
-  # n x n product (Z Psi Z^T) that the previous apply(., 1, sum) would coerce
-  # to a dense matrix.
-  sigma <- sqrt(Matrix::colSums(re_terms$Zt * (Psi %*% re_terms$Zt)))
-
-  # Supply both link name and inv link; will use inv link if link_name
-  # not supported
-  pred_base(eta = as.vector(glmmTMB::getME(fit, "X") %*% glmmTMB::getME(fit, "beta")),
-            sigma = sigma,
-            link_name = fit$modelInfo$family$link,
-            inv_link = fit$modelInfo$family$linkinv)
-
+  pred
 }

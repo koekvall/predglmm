@@ -23,7 +23,8 @@ sigma_sq_from_varcorr <- function(formula_obj, frame_data, vc_list) {
     attr(Psi_g, "correlation") <- NULL
     sig_sq <- sig_sq + rowSums((X_re %*% Psi_g) * X_re)
   }
-  sig_sq
+  # Strip model.matrix row names so comparisons are value-only
+  unname(sig_sq)
 }
 
 sigma_sq_glmer <- function(fit) {

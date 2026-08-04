@@ -1,6 +1,6 @@
 Package: predglmm
 Title: Marginal Predictions for Generalized Linear Mixed Models
-Version: 0.0.0.9000
+Version: 0.1.0
 Authors@R: 
     person("Karl Oskar", "Ekvall", , "k.o.ekvall@gmail.com", role = c("aut", "cre"))
 Description: Computes marginal predictions (expected values on the response scale) 
@@ -11,16 +11,17 @@ Description: Computes marginal predictions (expected values on the response scal
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.3
 Imports:
     lme4,
     glmmTMB,
     mvQuad,
     Matrix,
-    nlme
+    nlme,
+    reformulas
 Suggests: 
     knitr,
     rmarkdown,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
 VignetteBuilder: knitr
+Config/roxygen2/version: 8.0.0

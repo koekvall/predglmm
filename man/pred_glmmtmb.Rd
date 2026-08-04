@@ -4,25 +4,46 @@
 \alias{pred_glmmtmb}
 \title{Calculate predictions for glmmTMB fitted models}
 \usage{
-pred_glmmtmb(fit)
+pred_glmmtmb(fit, type = c("response", "conditional"), num_nodes = 15)
 }
 \arguments{
 \item{fit}{A fitted model object from \code{glmmTMB::glmmTMB}}
+
+\item{type}{\code{"response"} for the marginal mean of the response
+(includes the zero-inflation factor), \code{"conditional"} for the
+marginal mean of the conditional component only. Identical when the model
+has no zero inflation.}
+
+\item{num_nodes}{Number of Gauss--Hermite nodes used whenever a component
+requires numerical integration (default: 15)}
 }
 \value{
 A vector of predicted (fitted) values on the response scale
 }
 \description{
 Computes marginal predictions (expected values) for models fitted with
-\code{glmmTMB::glmmTMB}. Integrates over random effects to obtain predictions
-on the response scale. Uses \code{lme4::mkReTrms} to reconstruct the random
-effects structure and manually fills the sparse precision matrix from variance
-components.
+\code{glmmTMB::glmmTMB}, integrating over the random effects in the
+conditional model and, when present, in the zero-inflation model.
+}
+\details{
+For zero-inflated fits, \code{type = "response"} (the default) returns the
+marginal mean of the response, (1 - pi_i) * mu_i, where pi_i is the
+zero-inflation probability marginalized over any zi random effects and mu_i
+the conditional-component mean marginalized over the conditional random
+effects; \code{type = "conditional"} returns mu_i alone. For truncated
+families (\code{truncated_poisson}, \code{truncated_nbinom1},
+\code{truncated_nbinom2}) the conditional-component mean accounts for the
+zero truncation, which requires the dispersion parameter, so those families
+are supported only with constant dispersion (\code{dispformula = ~1}).
 }
 \examples{
 \dontrun{
 library(glmmTMB)
 fit <- glmmTMB(y ~ x + (1|group), data = mydata, family = poisson())
 predictions <- pred_glmmtmb(fit)
+# Hurdle model: marginal mean including the zero component
+fit2 <- glmmTMB(y ~ x + (1|group), ziformula = ~ x,
+                family = truncated_poisson, data = mydata)
+predictions2 <- pred_glmmtmb(fit2)
 }
 }
