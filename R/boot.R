@@ -1,64 +1,60 @@
 #' Parametric bootstrap confidence intervals for marginal predictions
 #'
-#' Simulates responses from a fitted model, refits the model to each simulated
-#' response, computes marginal predictions on the refit (\code{pred_glmmtmb}
-#' or \code{pred_glmer}, with their default arguments), and applies a
-#' user-supplied statistic to the model frame augmented with those
-#' predictions. Confidence intervals are formed from the bootstrap draws of
-#' the statistic. For lme4 fits, refitting uses \code{lme4::refit}, which
-#' reuses the fitted model structure and needs no access to the original
-#' data. For glmmTMB fits, the original call is re-evaluated with the
-#' simulated response substituted into the data, so the data must be
-#' recoverable from the model call and the response must be a single column
-#' of it (in particular, \code{cbind()} binomial responses are not
-#' supported).
+#' Computes confidence intervals for marginal predictions, or for functions
+#' of them, by a parametric bootstrap. Responses are simulated from the
+#' fitted model, the model is refit to each simulated response, marginal
+#' predictions are computed on each refit with \code{\link{pred_glmmtmb}} or
+#' \code{\link{pred_glmer}}, and the statistic is applied to the model frame
+#' augmented with those predictions. Intervals are formed from the bootstrap
+#' draws of the statistic.
 #'
-#' A replicate is dropped only when refitting fails outright: the refit
-#' throws an error or its optimizer reports non-convergence. Refits on the
-#' boundary of the parameter space (a variance component estimated at zero;
-#' flagged by \code{lme4::isSingular} for lme4 and by a non-positive-definite
-#' Hessian for glmmTMB) are kept: zero is a legitimate value of the
-#' estimator, and boundary refits arise exactly when a variance component is
-#' small, so discarding them would compute the intervals from a selected
-#' subset and bias them. The two counts are returned as \code{n_fail}
-#' (dropped) and \code{n_boundary} (kept). A large \code{n_boundary} is not a
-#' failure of the bootstrap but a sign the data are consistent with a zero
-#' variance component; interval accuracy is reduced in that regime because
-#' the parametric bootstrap is unreliable for parameters near a boundary.
-#'
-#' Two further cautions. First, if the model was selected using the same
-#' data, the bootstrap conditions on that selection and understates
-#' uncertainty: the fixed model is refit to every replicate, so variability
-#' from the selection step is not propagated. Second, this is a parametric
-#' bootstrap; responses are simulated from the fitted model, so the intervals
-#' inherit all of the model's assumptions (distribution, link,
-#' random-effects structure) and are not robust to their failure.
-#'
-#' @param fit A fitted model object from \code{glmmTMB::glmmTMB} or from
-#'   \code{lme4::glmer} / \code{lme4::lmer}.
-#' @param statistic Function taking the model frame with an added column
-#'   \code{pred} (the marginal predictions) and returning a numeric vector,
-#'   named if there is more than one element. Default \code{NULL} returns the
-#'   prediction vector itself. The statistic sees the model frame (the
-#'   variables as used in the formula), not the original data set.
-#' @param n_boot Number of bootstrap replicates (default: 1000).
-#' @param level Confidence level (default: 0.95).
-#' @param cores Number of workers (default: 1, serial). On unix-alikes,
-#'   parallel replicates use forking (\code{parallel::mclapply}); no sockets
-#'   are opened, so no firewall prompts or blocked connections. On Windows a
-#'   PSOCK cluster is used and stopped on exit.
-#' @param seed Optional integer seed. If supplied, the RNG kind is switched
-#'   to L'Ecuyer-CMRG so results are reproducible for a fixed
+#' @param fit A \code{glmmTMB} object from \code{glmmTMB::glmmTMB}, or a
+#'   \code{merMod} object from \code{lme4::glmer} or \code{lme4::lmer}.
+#' @param statistic Function of one argument, the model frame with an added
+#'   column \code{pred} holding the marginal predictions, returning a
+#'   numeric vector, named if longer than one. If \code{NULL} (default), the
+#'   predictions themselves.
+#' @param n_boot Positive integer. Number of bootstrap replicates. Default
+#'   is 1000.
+#' @param level Numeric confidence level in (0, 1). Default is \code{0.95}.
+#' @param cores Positive integer. Number of workers. Default is 1 (serial).
+#'   Parallel replicates use forking (\code{parallel::mclapply}) on
+#'   unix-alikes and a PSOCK cluster on Windows.
+#' @param seed Integer or \code{NULL}. If supplied, the RNG kind is set to
+#'   L'Ecuyer-CMRG, making results reproducible for fixed
 #'   \code{(seed, cores)}, and the caller's RNG state is restored on exit.
-#' @param type \code{"percentile"} for quantile intervals from the draws,
-#'   \code{"normal"} for \code{estimate +/- z * sd(draws)}.
-#' @return An object of class \code{"boot_pred"}: a list with components
+#' @param type Character, either \code{"percentile"} (default) or
+#'   \code{"normal"}. Percentile intervals are empirical quantiles of the
+#'   draws; normal intervals are the estimate plus and minus a standard
+#'   normal quantile times the standard deviation of the draws.
+#'
+#' @return An object of class \code{boot_pred}: a list with components
 #'   \code{estimate} (the statistic on the original fit), \code{draws}
-#'   (matrix, one column per kept replicate), \code{ci} (matrix with columns
-#'   \code{lower} and \code{upper}), \code{n_boot}, \code{n_fail} (replicates
-#'   dropped because the refit errored or did not converge),
-#'   \code{n_boundary} (kept replicates whose refit was on the boundary),
-#'   \code{level}, \code{type}, and \code{call}.
+#'   (matrix with one column per kept replicate), \code{ci} (matrix with
+#'   columns \code{lower} and \code{upper}), \code{n_boot}, \code{n_fail},
+#'   \code{n_boundary}, \code{level}, \code{type}, and \code{call}. Supports
+#'   \code{print}.
+#'
+#' @details
+#' A replicate is dropped only if the refit throws an error or its optimizer
+#' reports non-convergence; the number dropped is returned as \code{n_fail}.
+#' Refits with a variance component estimated at zero (singular fits for
+#' lme4, flagged by a non-positive-definite Hessian for glmmTMB) are kept
+#' and counted in \code{n_boundary}: such refits occur exactly when a
+#' variance component is small, so dropping them would bias the intervals.
+#' A large \code{n_boundary} indicates the data are compatible with a zero
+#' variance component, a regime where the parametric bootstrap is
+#' unreliable.
+#'
+#' lme4 models are refit with \code{lme4::refit}, which reuses the fitted
+#' structure. glmmTMB models are refit by re-evaluating the model call with
+#' the simulated response substituted into the data; the data must therefore
+#' be recoverable from the call, and the response must be a single column of
+#' the data (\code{cbind()} binomial responses are not supported).
+#'
+#' The intervals inherit the fitted model's assumptions, since responses are
+#' simulated from it. If the model was selected using the same data, the
+#' intervals condition on that selection and understate uncertainty.
 #' @examples
 #' \dontrun{
 #' library(glmmTMB)
@@ -74,7 +70,8 @@
 #' }
 #' @export
 boot_pred <- function(fit, statistic = NULL, n_boot = 1000, level = 0.95,
-                      cores = 1, seed = NULL, type = c("percentile", "normal")) {
+                      cores = 1, seed = NULL,
+                      type = c("percentile", "normal")) {
   type <- match.arg(type)
   stopifnot(is.null(statistic) || is.function(statistic),
             is.numeric(n_boot), length(n_boot) == 1, n_boot >= 1,
@@ -240,14 +237,14 @@ boot_pred <- function(fit, statistic = NULL, n_boot = 1000, level = 0.95,
             class = "boot_pred")
 }
 
-#' Print a boot_pred object
+#' Print method for bootstrap confidence intervals
 #'
-#' @param x An object of class \code{"boot_pred"}.
-#' @param digits Number of digits to display (default: 4).
-#' @param max_rows Maximum number of statistic elements to display
-#'   (default: 10).
-#' @param ... Ignored.
+#' @param x A \code{boot_pred} object from \code{\link{boot_pred}}.
+#' @param digits Number of digits displayed. Default 4.
+#' @param max_rows Maximum number of rows displayed. Default 10.
+#' @param ... Unused.
 #' @return \code{x}, invisibly.
+#' @method print boot_pred
 #' @export
 print.boot_pred <- function(x, digits = 4, max_rows = 10, ...) {
   cat("Parametric bootstrap CIs (", x$type, ", level = ", x$level, ")\n",
