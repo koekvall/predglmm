@@ -7,9 +7,10 @@ confidence intervals.
 ## Overview
 
 Standard predict methods for GLMMs return either conditional predictions,
-which plug in the estimated random effects, or predictions with the random
-effects set to zero. Neither is the marginal mean $E(Y_i \mid X_i)$, which
-averages over the random effects distribution:
+which plug in the predicted random effects, or predictions with the random
+effects set to zero. Neither is the marginal mean $E(Y_i \mid X_i)$ — the
+MSE-optimal predictor of $Y_i$ based on $X_i$ — which averages over the
+random effects' distribution:
 
 ```math
 E(Y_i \mid X_i) = \int h(\eta_i + z_i^\top b) \, \varphi(b; 0, \Psi) \, db,
@@ -18,14 +19,12 @@ E(Y_i \mid X_i) = \int h(\eta_i + z_i^\top b) \, \varphi(b; 0, \Psi) \, db,
 where $h$ is the inverse link function, $\eta_i = x_i^\top \beta$ is the
 linear predictor, $z_i$ is the random effects design vector, and
 $\varphi(\cdot; 0, \Psi)$ is the random effects density. When $h$ is
-nonlinear, $E[h(\eta + z^\top b)] \neq h(\eta)$ by Jensen's inequality, so
+nonlinear, $E[h(\eta + z^\top b)] \neq h(\eta)$ in general, so
 zero-RE predictions are biased for the marginal mean, and the bias grows
 with the random effect variance.
 
-predglmm computes the integral analytically for the identity, log, and
-square-root links — for the log link,
-$E(Y_i \mid X_i) = \exp(\eta_i + \sigma_i^2/2)$ with
-$\sigma_i^2 = z_i^\top \Psi z_i$ — and by Gauss–Hermite quadrature for any
+`predglmm` computes the integral analytically for the identity, log, and
+square-root links, and by Gauss–Hermite quadrature for any
 other link, including user-supplied inverse links.
 
 The figure shows the mean squared error of the three prediction types
@@ -36,10 +35,10 @@ deviation $\sigma_b$ grows (300 replications per point; code in
 
 ![MSE of fitted values vs true marginal mean](man/figures/sim_mse.png)
 
-Marginal predictions have the smallest error throughout. Zero-RE
-predictions estimate $\exp(\beta)$ instead of the marginal mean, so their
-error grows with $\sigma_b$; conditional predictions track individual
-subjects, not the marginal mean.
+Marginal predictions have the smallest error throughout, in line with the
+theory. Zero-RE predictions estimate $\exp(\beta)$ instead of the marginal
+mean, so their error grows with $\sigma_b$; conditional predictions track
+individual subjects, not the marginal mean.
 
 ## Installation
 
