@@ -35,6 +35,9 @@ families (\code{truncated_poisson}, \code{truncated_nbinom1},
 \code{truncated_nbinom2}) the conditional-component mean accounts for the
 zero truncation, which requires the dispersion parameter, so those families
 are supported only with constant dispersion (\code{dispformula = ~1}).
+
+Offsets in the conditional and zero-inflation components are included in
+the corresponding linear predictors.
 }
 \examples{
 \dontrun{

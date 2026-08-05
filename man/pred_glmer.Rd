@@ -10,14 +10,18 @@ pred_glmer(fit)
 \item{fit}{A fitted model object from \code{lme4::glmer} or \code{lme4::lmer}}
 }
 \value{
-A vector of predicted (fitted) values. For lmerMod, returns X \%*\% beta.
-For glmerMod, returns marginal expectations on the response scale.
+A vector of predicted (fitted) values. For lmerMod, returns
+X \%*\% beta plus any offset. For glmerMod, returns marginal expectations
+on the response scale.
 }
 \description{
 Computes marginal predictions (expected values) for models fitted with
 \code{lme4::glmer} or \code{lme4::lmer}. For linear mixed models (lmerMod),
 returns the linear predictor. For generalized linear mixed models (glmerMod),
 integrates over random effects to obtain predictions on the response scale.
+}
+\details{
+Any model offset is included in the linear predictor.
 }
 \examples{
 \dontrun{

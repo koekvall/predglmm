@@ -11,7 +11,7 @@
 # bars handles crossed / nested / multiple-factor structures uniformly.
 
 sigma_sq_from_varcorr <- function(formula_obj, frame_data, vc_list) {
-  re_terms <- lme4::findbars(formula_obj)
+  re_terms <- reformulas::findbars(formula_obj)
   stopifnot(length(re_terms) == length(vc_list))
   sig_sq <- numeric(nrow(frame_data))
   for (k in seq_along(re_terms)) {

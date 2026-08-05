@@ -4,16 +4,18 @@
 #' of them, by a parametric bootstrap. Responses are simulated from the
 #' fitted model, the model is refit to each simulated response, marginal
 #' predictions are computed on each refit with \code{\link{pred_glmmtmb}} or
-#' \code{\link{pred_glmer}}, and the statistic is applied to the model frame
+#' \code{\link{pred_glmer}}, and the statistic is applied to the model data
 #' augmented with those predictions. Intervals are formed from the bootstrap
 #' draws of the statistic.
 #'
 #' @param fit A \code{glmmTMB} object from \code{glmmTMB::glmmTMB}, or a
 #'   \code{merMod} object from \code{lme4::glmer} or \code{lme4::lmer}.
-#' @param statistic Function of one argument, the model frame with an added
-#'   column \code{pred} holding the marginal predictions, returning a
-#'   numeric vector, named if longer than one. If \code{NULL} (default), the
-#'   predictions themselves.
+#' @param statistic Function of one argument, the data the model was fit to
+#'   with an added column \code{pred} holding the marginal predictions
+#'   (\code{NA} for rows dropped by the fit's NA handling), returning a
+#'   numeric vector, named if longer than one. Columns of the data not
+#'   appearing in the model formula are available. If \code{NULL} (default),
+#'   the predictions for the fitted observations.
 #' @param n_boot Positive integer. Number of bootstrap replicates. Default
 #'   is 1000.
 #' @param level Numeric confidence level in (0, 1). Default is \code{0.95}.
@@ -32,8 +34,9 @@
 #'   \code{estimate} (the statistic on the original fit), \code{draws}
 #'   (matrix with one column per kept replicate), \code{ci} (matrix with
 #'   columns \code{lower} and \code{upper}), \code{n_boot}, \code{n_fail},
-#'   \code{n_boundary}, \code{level}, \code{type}, and \code{call}. Supports
-#'   \code{print}.
+#'   \code{n_boundary} (\code{NA} for glmmTMB fits made with
+#'   \code{se = FALSE}, see Details), \code{level}, \code{type}, and
+#'   \code{call}. Supports \code{print}.
 #'
 #' @details
 #' A replicate is dropped only if the refit throws an error or its optimizer
@@ -46,27 +49,45 @@
 #' variance component, a regime where the parametric bootstrap is
 #' unreliable.
 #'
-#' lme4 models are refit with \code{lme4::refit}, which reuses the fitted
-#' structure. glmmTMB models are refit by re-evaluating the model call with
-#' the simulated response substituted into the data; the data must therefore
-#' be recoverable from the call, and the response must be a single column of
-#' the data (\code{cbind()} binomial responses are not supported).
+#' The statistic receives the data frame passed as the model call's
+#' \code{data} argument, so variables not appearing in the model formula are
+#' available. For \code{merMod} fits with no recoverable data frame
+#' (variables taken from the environment, or a \code{subset} argument), the
+#' model frame is used instead and only formula variables are available.
+#' Rows dropped by NA handling have \code{pred = NA}; a statistic that
+#' aggregates over such rows should allow for this, for example with
+#' \code{na.rm = TRUE}.
+#'
+#' glmmTMB fits are refit by re-evaluating the model call, so the data must
+#' be recoverable from the call, the response must be a single column of the
+#' data (for binomial responses, use proportions with \code{weights}, not
+#' \code{cbind()}), and fits made with \code{subset} are not supported. For
+#' fits made with \code{se = FALSE}, boundary status is unavailable and
+#' \code{n_boundary} is \code{NA}.
 #'
 #' The intervals inherit the fitted model's assumptions, since responses are
 #' simulated from it. If the model was selected using the same data, the
 #' intervals condition on that selection and understate uncertainty.
 #' @examples
-#' \dontrun{
-#' library(glmmTMB)
-#' fit <- glmmTMB(y ~ group + (1 | id), data = d, family = poisson())
+#' \donttest{
+#' set.seed(1)
+#' d <- data.frame(
+#'   x = factor(rep(c("a", "b"), times = 40)),
+#'   group = factor(rep(1:8, each = 10))
+#' )
+#' d$y <- rpois(80, exp(0.5 + 0.4 * (d$x == "b") +
+#'                        rep(rnorm(8, sd = 0.6), each = 10)))
+#' fit <- lme4::glmer(y ~ x + (1 | group), data = d, family = poisson())
 #'
-#' # CI for the difference in cell means of the predictions between groups
+#' # Percentile CIs for each observation's marginal prediction
+#' boot_pred(fit, n_boot = 100, seed = 1)
+#'
+#' # CI for the difference in mean predictions between levels of x
 #' contrast <- function(data) {
-#'   m <- tapply(data$pred, data$group, mean)
-#'   c("A-B" = unname(m["A"] - m["B"]))
+#'   m <- tapply(data$pred, data$x, mean)
+#'   c("a-b" = unname(m["a"] - m["b"]))
 #' }
-#' b <- boot_pred(fit, statistic = contrast, n_boot = 1000, seed = 1)
-#' print(b)
+#' boot_pred(fit, statistic = contrast, n_boot = 100, seed = 1)
 #' }
 #' @export
 boot_pred <- function(fit, statistic = NULL, n_boot = 1000, level = 0.95,
@@ -80,14 +101,19 @@ boot_pred <- function(fit, statistic = NULL, n_boot = 1000, level = 0.95,
   n_boot <- as.integer(n_boot)
   cl_call <- match.call()
 
-  # Per-class ingredients: the model frame the statistic sees, the prediction
+  # Per-class ingredients: the data the statistic sees, the prediction
   # and refit functions, and the two screens. "Failed" refits are dropped;
   # "boundary" refits are kept and counted (see Details).
   if (inherits(fit, "glmmTMB")) {
-    frame <- fit$frame
     pred_fun <- pred_glmmtmb
     failed <- function(f) !isTRUE(f$fit$convergence == 0)
-    boundary <- function(f) !isTRUE(f$sdr$pdHess)
+    # A fit made with se = FALSE has no sdreport, so the Hessian-based
+    # boundary flag cannot be assessed; report NA rather than a bogus count
+    if (is.null(fit$sdr)) {
+      boundary <- function(f) NA
+    } else {
+      boundary <- function(f) !isTRUE(f$sdr$pdHess)
+    }
     worker_pkg <- "glmmTMB"
 
     # glmmTMB has no structure-reusing refit (glmmTMB::refit re-evaluates the
@@ -97,6 +123,13 @@ boot_pred <- function(fit, statistic = NULL, n_boot = 1000, level = 0.95,
     # the call (formula, family, ...) resolve in the formula's environment,
     # where the original call was evaluated.
     cc <- stats::getCall(fit)
+    if (!is.null(cc$subset)) {
+      stop("fits made with a 'subset' argument are not supported; subset ",
+           "the data before fitting")
+    }
+    # Namespace the call head so refits also work on PSOCK workers, where
+    # the backend package is loaded but not attached
+    cc[[1]] <- quote(glmmTMB::glmmTMB)
     form_env <- environment(stats::formula(fit))
     if (is.null(form_env)) form_env <- parent.frame()
     dat <- tryCatch(eval(cc$data, envir = form_env), error = function(e) NULL)
@@ -109,35 +142,86 @@ boot_pred <- function(fit, statistic = NULL, n_boot = 1000, level = 0.95,
     if (length(resp) != 1 || !(resp %in% names(dat))) {
       stop("the response must be a single column of the model data")
     }
+    # simulate() returns one value per row used in the fit; rows dropped by
+    # the fit's NA handling get NA responses in the refit data, so each
+    # refit drops exactly the same rows
+    used_rows <- setdiff(seq_len(nrow(dat)),
+                         as.integer(attr(fit$frame, "na.action")))
+    if (length(used_rows) != stats::nobs(fit)) {
+      stop("the model data could not be aligned with the fitted ",
+           "observations; refit so that every row of the data enters the ",
+           "model frame or is dropped by NA handling")
+    }
+    # The statistic sees the recovered data, not the reduced model frame,
+    # so columns not appearing in the formula remain available
+    stat_data <- dat
     refit_fun <- function(y) {
+      # simulate.glmmTMB returns a (successes, failures) matrix for
+      # binomial-type responses fitted as proportions; convert back so the
+      # response type matches the call, which still carries any weights
+      if (is.matrix(y)) {
+        n_trials <- rowSums(y)
+        y <- ifelse(n_trials > 0, y[, 1] / n_trials, 0)
+      }
+      y_col <- rep(NA_real_, nrow(dat))
+      y_col[used_rows] <- y
       dat_boot <- dat
-      dat_boot[[resp]] <- y
+      dat_boot[[resp]] <- y_col
       cc_boot <- cc
       cc_boot$data <- quote(.predglmm_boot_data)
       eval(cc_boot, envir = list(.predglmm_boot_data = dat_boot),
            enclos = form_env)
     }
   } else if (inherits(fit, "merMod")) {
-    frame <- fit@frame
     pred_fun <- pred_glmer
     refit_fun <- function(y) lme4::refit(fit, newresp = y)
     failed <- function(f) !isTRUE(f@optinfo$conv$opt == 0)
     boundary <- function(f) lme4::isSingular(f)
     worker_pkg <- "lme4"
+
+    # lme4::refit does not need the original data, but the statistic should
+    # still see it so that columns not appearing in the formula remain
+    # available. Recover it from the call; if the fit was made without a
+    # data argument, or the data cannot be aligned with the fitted
+    # observations (e.g. a subset argument), fall back to the model frame,
+    # which holds the formula variables only.
+    form_env <- environment(stats::formula(fit))
+    if (is.null(form_env)) form_env <- parent.frame()
+    dat <- tryCatch(eval(stats::getCall(fit)$data, envir = form_env),
+                    error = function(e) NULL)
+    if (is.data.frame(dat)) {
+      used_rows <- setdiff(seq_len(nrow(dat)),
+                           as.integer(attr(fit@frame, "na.action")))
+    }
+    if (is.data.frame(dat) && length(used_rows) == stats::nobs(fit)) {
+      stat_data <- dat
+    } else {
+      stat_data <- fit@frame
+      used_rows <- seq_len(nrow(stat_data))
+    }
   } else {
     stop("fit must be a glmmTMB or merMod (lme4) fit")
   }
 
-  if ("pred" %in% names(frame)) {
-    stop("the model frame already has a column named 'pred'; rename that ",
-         "variable in the model")
+  if ("pred" %in% names(stat_data)) {
+    stop("the model data already has a column named 'pred'; rename that ",
+         "variable before fitting")
   }
 
-  if (is.null(statistic)) statistic <- function(data) data$pred
+  # The pred column is NA for rows the fit dropped, so a statistic never
+  # sees stale or misaligned values; the default statistic returns the
+  # predictions for the rows actually used, aligning its output with the
+  # fitted observations
+  if (is.null(statistic)) statistic <- function(data) data$pred[used_rows]
 
-  frame_est <- frame
-  frame_est$pred <- pred_fun(fit)
-  estimate <- statistic(frame_est)
+  add_pred <- function(pred_vals) {
+    p <- rep(NA_real_, nrow(stat_data))
+    p[used_rows] <- pred_vals
+    stat_data$pred <- p
+    stat_data
+  }
+
+  estimate <- statistic(add_pred(pred_fun(fit)))
   if (!is.numeric(estimate) || length(estimate) < 1) {
     stop("statistic must return a numeric vector")
   }
@@ -173,9 +257,8 @@ boot_pred <- function(fit, statistic = NULL, n_boot = 1000, level = 0.95,
       suppressWarnings(suppressMessages(refit_fun(y_boot))),
       error = function(e) NULL)
     if (is.null(fit_boot) || failed(fit_boot)) return(NULL)
-    frame_boot <- frame
-    frame_boot$pred <- pred_fun(fit_boot)
-    list(stat = statistic(frame_boot), boundary = boundary(fit_boot))
+    list(stat = statistic(add_pred(pred_fun(fit_boot))),
+         boundary = boundary(fit_boot))
   }
 
   if (cores > 1 && .Platform$OS.type != "windows") {
@@ -208,7 +291,8 @@ boot_pred <- function(fit, statistic = NULL, n_boot = 1000, level = 0.95,
     stop("all ", n_boot, " bootstrap refits failed (error or non-convergence)")
   }
   res <- res[keep]
-  n_boundary <- sum(vapply(res, function(r) isTRUE(r$boundary), logical(1)))
+  bnd <- vapply(res, function(r) as.logical(r$boundary), logical(1))
+  n_boundary <- if (anyNA(bnd)) NA_integer_ else sum(bnd)
   # vapply enforces that every kept replicate has length q; matrix() keeps
   # the q x m shape also when q = 1, where vapply returns a plain vector
   draws <- matrix(vapply(res, function(r) as.vector(r$stat), numeric(q)),
@@ -255,8 +339,13 @@ print.boot_pred <- function(x, digits = 4, max_rows = 10, ...) {
   if (nrow(tab) > n_show) {
     cat("... ", nrow(tab) - n_show, " more rows\n", sep = "")
   }
-  cat(x$n_boot, " replicates: ", ncol(x$draws), " kept (", x$n_boundary,
-      " on the boundary), ", x$n_fail, " dropped (refit error or ",
+  bnd_txt <- if (is.na(x$n_boundary)) {
+    "boundary status unknown"
+  } else {
+    paste0(x$n_boundary, " on the boundary")
+  }
+  cat(x$n_boot, " replicates: ", ncol(x$draws), " kept (", bnd_txt,
+      "), ", x$n_fail, " dropped (refit error or ",
       "non-convergence)\n", sep = "")
   invisible(x)
 }

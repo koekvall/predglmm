@@ -48,10 +48,7 @@ test_that("error when neither link_name nor inv_link given", {
   expect_error(pred_base(c(1, 2)), "Exactly one")
 })
 
-test_that("unsupported link_name returns NA with warning", {
-  expect_warning(
-    result <- pred_base(c(1), c(0), link_name = "probit"),
-    "not implemented"
-  )
-  expect_true(is.na(result))
+test_that("unsupported link_name without inv_link is an error", {
+  expect_error(pred_base(c(1), c(0), link_name = "probit"),
+               "not implemented")
 })

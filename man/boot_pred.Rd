@@ -18,10 +18,12 @@ boot_pred(
 \item{fit}{A \code{glmmTMB} object from \code{glmmTMB::glmmTMB}, or a
 \code{merMod} object from \code{lme4::glmer} or \code{lme4::lmer}.}
 
-\item{statistic}{Function of one argument, the model frame with an added
-column \code{pred} holding the marginal predictions, returning a
-numeric vector, named if longer than one. If \code{NULL} (default), the
-predictions themselves.}
+\item{statistic}{Function of one argument, the data the model was fit to
+with an added column \code{pred} holding the marginal predictions
+(\code{NA} for rows dropped by the fit's NA handling), returning a
+numeric vector, named if longer than one. Columns of the data not
+appearing in the model formula are available. If \code{NULL} (default),
+the predictions for the fitted observations.}
 
 \item{n_boot}{Positive integer. Number of bootstrap replicates. Default
 is 1000.}
@@ -46,15 +48,16 @@ An object of class \code{boot_pred}: a list with components
 \code{estimate} (the statistic on the original fit), \code{draws}
 (matrix with one column per kept replicate), \code{ci} (matrix with
 columns \code{lower} and \code{upper}), \code{n_boot}, \code{n_fail},
-\code{n_boundary}, \code{level}, \code{type}, and \code{call}. Supports
-\code{print}.
+\code{n_boundary} (\code{NA} for glmmTMB fits made with
+\code{se = FALSE}, see Details), \code{level}, \code{type}, and
+\code{call}. Supports \code{print}.
 }
 \description{
 Computes confidence intervals for marginal predictions, or for functions
 of them, by a parametric bootstrap. Responses are simulated from the
 fitted model, the model is refit to each simulated response, marginal
 predictions are computed on each refit with \code{\link{pred_glmmtmb}} or
-\code{\link{pred_glmer}}, and the statistic is applied to the model frame
+\code{\link{pred_glmer}}, and the statistic is applied to the model data
 augmented with those predictions. Intervals are formed from the bootstrap
 draws of the statistic.
 }
@@ -69,27 +72,45 @@ A large \code{n_boundary} indicates the data are compatible with a zero
 variance component, a regime where the parametric bootstrap is
 unreliable.
 
-lme4 models are refit with \code{lme4::refit}, which reuses the fitted
-structure. glmmTMB models are refit by re-evaluating the model call with
-the simulated response substituted into the data; the data must therefore
-be recoverable from the call, and the response must be a single column of
-the data (\code{cbind()} binomial responses are not supported).
+The statistic receives the data frame passed as the model call's
+\code{data} argument, so variables not appearing in the model formula are
+available. For \code{merMod} fits with no recoverable data frame
+(variables taken from the environment, or a \code{subset} argument), the
+model frame is used instead and only formula variables are available.
+Rows dropped by NA handling have \code{pred = NA}; a statistic that
+aggregates over such rows should allow for this, for example with
+\code{na.rm = TRUE}.
+
+glmmTMB fits are refit by re-evaluating the model call, so the data must
+be recoverable from the call, the response must be a single column of the
+data (for binomial responses, use proportions with \code{weights}, not
+\code{cbind()}), and fits made with \code{subset} are not supported. For
+fits made with \code{se = FALSE}, boundary status is unavailable and
+\code{n_boundary} is \code{NA}.
 
 The intervals inherit the fitted model's assumptions, since responses are
 simulated from it. If the model was selected using the same data, the
 intervals condition on that selection and understate uncertainty.
 }
 \examples{
-\dontrun{
-library(glmmTMB)
-fit <- glmmTMB(y ~ group + (1 | id), data = d, family = poisson())
+\donttest{
+set.seed(1)
+d <- data.frame(
+  x = factor(rep(c("a", "b"), times = 40)),
+  group = factor(rep(1:8, each = 10))
+)
+d$y <- rpois(80, exp(0.5 + 0.4 * (d$x == "b") +
+                       rep(rnorm(8, sd = 0.6), each = 10)))
+fit <- lme4::glmer(y ~ x + (1 | group), data = d, family = poisson())
 
-# CI for the difference in cell means of the predictions between groups
+# Percentile CIs for each observation's marginal prediction
+boot_pred(fit, n_boot = 100, seed = 1)
+
+# CI for the difference in mean predictions between levels of x
 contrast <- function(data) {
-  m <- tapply(data$pred, data$group, mean)
-  c("A-B" = unname(m["A"] - m["B"]))
+  m <- tapply(data$pred, data$x, mean)
+  c("a-b" = unname(m["a"] - m["b"]))
 }
-b <- boot_pred(fit, statistic = contrast, n_boot = 1000, seed = 1)
-print(b)
+boot_pred(fit, statistic = contrast, n_boot = 100, seed = 1)
 }
 }

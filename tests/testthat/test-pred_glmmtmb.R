@@ -36,6 +36,20 @@ test_that("pred_glmmtmb rejects non-glmmTMB objects", {
   expect_error(pred_glmmtmb(lm(1:10 ~ 1)))
 })
 
+test_that("pred_glmmtmb handles rank-deficient designs", {
+  skip_on_cran()
+  set.seed(8)
+  d <- data.frame(y = rpois(200, 3), x = rnorm(200),
+                  g = factor(rep(1:20, each = 10)))
+  d$x2 <- d$x  # perfectly collinear; glmmTMB drops it with a warning
+  fit_full <- suppressWarnings(suppressMessages(
+    glmmTMB::glmmTMB(y ~ x + x2 + (1 | g), data = d, family = poisson())
+  ))
+  fit_red <- glmmTMB::glmmTMB(y ~ x + (1 | g), data = d, family = poisson())
+  expect_equal(pred_glmmtmb(fit_full), pred_glmmtmb(fit_red),
+               tolerance = 1e-6)
+})
+
 # Shared data for the zero-inflation and truncation tests: counts with excess
 # zeros, a binary covariate, and a grouping factor
 make_zi_data <- function() {

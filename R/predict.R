@@ -4,7 +4,8 @@
 #' @param sigma An n-vector of standard deviations for the random effects.
 #'   Default is zeros (no random effects). NA values are replaced with zeros.
 #' @param link_name Character string specifying the link function. Currently supports
-#'   "identity", "log", or "sqrt". Use NA if providing a custom inv_link function.
+#'   "identity", "log", or "sqrt"; other values are an error unless inv_link
+#'   is also supplied. Use NA if providing a custom inv_link function.
 #'   If both link_name and inv_link are provided, uses link_name if it's supported,
 #'   otherwise falls back to inv_link with numerical integration.
 #' @param num_nodes Number of nodes for Gaussian quadrature used to calculate predictions
@@ -81,8 +82,8 @@ pred_base <- function(eta, sigma = rep(0, length(eta)), link_name = NA, num_node
   } else if (link_name == "sqrt") {
     eta <- eta^2 + sigma^2
   } else {
-    warning("Requested link_name not implemented; returning NA")
-    eta <- rep(NA, n)
+    stop("link_name '", link_name, "' is not implemented; supply inv_link ",
+         "to integrate by quadrature instead")
   }
 
   # Return
@@ -96,9 +97,12 @@ pred_base <- function(eta, sigma = rep(0, length(eta)), link_name = NA, num_node
 #' returns the linear predictor. For generalized linear mixed models (glmerMod),
 #' integrates over random effects to obtain predictions on the response scale.
 #'
+#' Any model offset is included in the linear predictor.
+#'
 #' @param fit A fitted model object from \code{lme4::glmer} or \code{lme4::lmer}
-#' @return A vector of predicted (fitted) values. For lmerMod, returns X %*% beta.
-#'   For glmerMod, returns marginal expectations on the response scale.
+#' @return A vector of predicted (fitted) values. For lmerMod, returns
+#'   X %*% beta plus any offset. For glmerMod, returns marginal expectations
+#'   on the response scale.
 #' @examples
 #' \dontrun{
 #' library(lme4)
@@ -107,10 +111,14 @@ pred_base <- function(eta, sigma = rep(0, length(eta)), link_name = NA, num_node
 #' }
 #' @export
 pred_glmer <- function(fit) {
-  if(inherits(fit, "lmerMod")) {
-    pred <- as.vector(lme4::getME(fit, "X") %*% lme4::getME(fit, "beta"))
-  } else if (inherits(fit, "glmerMod")) {
-    pred <- as.vector(lme4::getME(fit, "X") %*% lme4::getME(fit, "beta"))
+  if (!(inherits(fit, "lmerMod") || inherits(fit, "glmerMod"))) {
+    stop("fit must be lmerMod or glmerMod")
+  }
+  # getME returns a length-n zero vector when the model has no offset
+  off <- lme4::getME(fit, "offset")
+  if (length(off) == 0) off <- 0
+  pred <- as.vector(lme4::getME(fit, "X") %*% lme4::getME(fit, "beta")) + off
+  if (inherits(fit, "glmerMod")) {
     # H = Z %*% Lambda, so diag(H H^T) = diag(Z Sigma Z^T) gives Var(z_i^T b)
     # per observation. rowSums on a sparse matrix avoids the dense coercion
     # that apply(., 1, sum) would force.
@@ -122,8 +130,6 @@ pred_glmer <- function(fit) {
                       link_name = fit@resp$family$link,
                       inv_link = fit@resp$family$linkinv
     )
-  } else{
-    stop("fit must be lmerMod or glmerMod")
   }
   pred
 }
@@ -188,6 +194,9 @@ re_sd_glmmtmb <- function(form, fr, vc) {
 #' zero truncation, which requires the dispersion parameter, so those families
 #' are supported only with constant dispersion (\code{dispformula = ~1}).
 #'
+#' Offsets in the conditional and zero-inflation components are included in
+#' the corresponding linear predictors.
+#'
 #' @param fit A fitted model object from \code{glmmTMB::glmmTMB}
 #' @param type \code{"response"} for the marginal mean of the response
 #'   (includes the zero-inflation factor), \code{"conditional"} for the
@@ -217,8 +226,13 @@ pred_glmmtmb <- function(fit, type = c("response", "conditional"),
   # Conditional component: eta and per-observation RE standard deviation.
   # Use fixef()$cond rather than getME(fit, "beta"): for families with a
   # dispersion parameter (e.g. nbinom1/nbinom2), getME appends it to beta,
-  # making the product with X non-conformable.
-  eta <- as.vector(glmmTMB::getME(fit, "X") %*% glmmTMB::fixef(fit)$cond)
+  # making the product with X non-conformable. For rank-deficient designs
+  # glmmTMB drops columns from X but keeps the dropped coefficients as NA
+  # in fixef(), so align beta with X's columns. The offset (given in the
+  # formula or as an argument) is stored in the TMB data.
+  X <- glmmTMB::getME(fit, "X")
+  beta <- glmmTMB::fixef(fit)$cond[colnames(X)]
+  eta <- as.vector(X %*% beta) + fit$obj$env$data$offset
   sigma <- re_sd_glmmtmb(stats::formula(fit), fit$frame, VC$cond)
 
   trunc_families <- c("truncated_poisson", "truncated_nbinom1",
@@ -268,7 +282,9 @@ pred_glmmtmb <- function(fit, type = c("response", "conditional"),
   # so integrate by quadrature.
   ziform <- fit$modelInfo$allForm$ziformula
   if (type == "response" && !identical(deparse(ziform), "~0")) {
-    eta_zi <- as.vector(glmmTMB::getME(fit, "Xzi") %*% glmmTMB::fixef(fit)$zi)
+    Xzi <- glmmTMB::getME(fit, "Xzi")
+    beta_zi <- glmmTMB::fixef(fit)$zi[colnames(Xzi)]
+    eta_zi <- as.vector(Xzi %*% beta_zi) + fit$obj$env$data$zioffset
     sigma_zi <- re_sd_glmmtmb(ziform, fit$frame, VC$zi)
     if (all(sigma_zi == 0)) {
       p_zi <- stats::plogis(eta_zi)

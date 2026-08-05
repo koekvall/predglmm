@@ -20,7 +20,8 @@ pred_base(
 Default is zeros (no random effects). NA values are replaced with zeros.}
 
 \item{link_name}{Character string specifying the link function. Currently supports
-"identity", "log", or "sqrt". Use NA if providing a custom inv_link function.
+"identity", "log", or "sqrt"; other values are an error unless inv_link
+is also supplied. Use NA if providing a custom inv_link function.
 If both link_name and inv_link are provided, uses link_name if it's supported,
 otherwise falls back to inv_link with numerical integration.}
 
