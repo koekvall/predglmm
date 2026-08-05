@@ -19,7 +19,8 @@ Imports:
     parallel,
     reformulas,
     stats
-Suggests: 
+Suggests:
+    ggplot2,
     knitr,
     rmarkdown,
     testthat (>= 3.0.0)

@@ -208,3 +208,57 @@ fit_lme4 <- glmer(
 d$marginal_lme4 <- pred_glmer(fit_lme4)
 summary(d$marginal - d$marginal_lme4)
 ```
+
+## Bootstrap confidence intervals
+
+The `boot_pred` function computes parametric bootstrap confidence intervals
+for marginal predictions and for functions of them. Responses are simulated
+from the fitted model, the model is refit to each simulated response, and
+the statistic of interest is recomputed from the marginal predictions of
+each refit. Intervals are formed from the resulting draws.
+
+Each replicate refits the model, so we illustrate with a smaller data set.
+The data include a covariate `x` and a variable `region` that is not part
+of the model.
+
+```{r boot-data, cache = TRUE}
+set.seed(3)
+d_boot <- data.frame(
+  group = factor(rep(1:15, each = 10)),
+  region = factor(rep(c("north", "south"), times = c(70, 80))),
+  x = rnorm(150, mean = rep(c(0, 0.8), times = c(70, 80)))
+)
+d_boot$y <- rpois(150, exp(0.5 + 0.4 * d_boot$x +
+                             rep(rnorm(15, sd = 0.4), each = 10)))
+
+fit_boot <- glmmTMB(y ~ x + (1 | group), data = d_boot, family = poisson())
+```
+
+By default, `boot_pred` returns percentile intervals for every marginal
+prediction. We use 200 replicates to keep the build quick; 1000 or more is
+typical in applications.
+
+```{r boot-default, cache = TRUE}
+b <- boot_pred(fit_boot, n_boot = 200, seed = 1)
+print(b, max_rows = 5)
+```
+
+The last line of the output reports how many refits were kept, how many of
+those were on the boundary of the parameter space (a variance component
+estimated at zero), and how many were dropped; see `?boot_pred` for the
+screening rules.
+
+A statistic function maps the model data, augmented with a column `pred`
+of marginal predictions, to the quantities of interest. The statistic sees
+the full data frame the model was fit to, so it can use variables that do
+not appear in the model formula. Here the regions differ in their
+distribution of `x`, and the statistic compares mean predictions between
+regions -- a comparison adjusted for the model's covariate:
+
+```{r boot-contrast, cache = TRUE}
+region_diff <- function(data) {
+  m <- tapply(data$pred, data$region, mean)
+  c("south-north" = unname(m["south"] - m["north"]))
+}
+boot_pred(fit_boot, statistic = region_diff, n_boot = 200, seed = 1)
+```
