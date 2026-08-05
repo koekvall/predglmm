@@ -8,8 +8,8 @@ confidence intervals.
 
 Standard predict methods for GLMMs return either conditional predictions,
 which plug in the predicted random effects, or predictions with the random
-effects set to zero. Neither is the marginal mean $E(Y_i \mid X_i)$ — the
-MSE-optimal predictor of $Y_i$ based on $X_i$ — which averages over the
+effects set to zero. Neither is the marginal mean $E(Y_i \mid X_i)$, which
+is the MSE-optimal prediction based on $X_i$ alone and averages over the
 random effects' distribution:
 
 ```math
