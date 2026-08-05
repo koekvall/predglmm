@@ -1,88 +1,122 @@
 # predglmm
 
-Marginal predictions (expected values on the response scale) for generalized 
-linear mixed models.
-
-Note: This package has undergone only minimal testing and comes with no warranty!
+Marginal predictions (expected values on the response scale) for generalized
+linear mixed models fitted with lme4 or glmmTMB, with parametric bootstrap
+confidence intervals.
 
 ## Overview
 
-When fitting GLMMs, predictions that account for random effects uncertainty are 
-often needed. This package computes marginal expectations by integrating over 
-the random effects distribution, using either analytical expressions (when available) 
-or Gaussian-Hermite quadrature.
+Standard predict methods for GLMMs return either conditional predictions,
+which plug in the estimated random effects, or predictions with the random
+effects set to zero. Neither is the marginal mean $E(Y_i \mid X_i)$, which
+averages over the random effects distribution:
+
+```math
+E(Y_i \mid X_i) = \int h(\eta_i + z_i^\top b) \, \varphi(b; 0, \Psi) \, db,
+```
+
+where $h$ is the inverse link function, $\eta_i = x_i^\top \beta$ is the
+linear predictor, $z_i$ is the random effects design vector, and
+$\varphi(\cdot; 0, \Psi)$ is the random effects density. When $h$ is
+nonlinear, $E[h(\eta + z^\top b)] \neq h(\eta)$ by Jensen's inequality, so
+zero-RE predictions are biased for the marginal mean, and the bias grows
+with the random effect variance.
+
+predglmm computes the integral analytically for the identity, log, and
+square-root links — for the log link,
+$E(Y_i \mid X_i) = \exp(\eta_i + \sigma_i^2/2)$ with
+$\sigma_i^2 = z_i^\top \Psi z_i$ — and by Gauss–Hermite quadrature for any
+other link, including user-supplied inverse links.
+
+The figure shows the mean squared error of the three prediction types
+against the true marginal mean $\exp(\beta + \sigma_b^2/2)$ in an
+intercept-only Poisson GLMM with log link, as the random effect standard
+deviation $\sigma_b$ grows (300 replications per point; code in
+[sim_mse.R](sim_mse.R)):
+
+![MSE of fitted values vs true marginal mean](man/figures/sim_mse.png)
+
+Marginal predictions have the smallest error throughout. Zero-RE
+predictions estimate $\exp(\beta)$ instead of the marginal mean, so their
+error grows with $\sigma_b$; conditional predictions track individual
+subjects, not the marginal mean.
 
 ## Installation
 
 ```r
-# Install from GitHub
-# devtools::install_github("koekvall/predglmm")
+devtools::install_github("koekvall/predglmm")
 ```
 
-## Usage
+## Marginal predictions
 
 ```r
-library(lme4)
 library(glmmTMB)
+library(lme4)
 library(predglmm)
 
-# Poisson GLMM (closed form expressions for predictions)
-fit_tmb <- glmmTMB(count ~ mined + (1|site),
-  family=poisson, data=Salamanders)
-fit_lme4 <- glmer(count ~ mined + (1|site),
-  family=poisson, data=Salamanders)
-  
-# Get marginal predictions on the response scale
-pred_tmb <- pred_glmmtmb(fit_tmb)
-pred_lme4 <- pred_glmer(fit_lme4)
+# Poisson GLMM, log link: closed-form marginal predictions
+fit_tmb <- glmmTMB(count ~ mined + (1 | site),
+                   family = poisson, data = Salamanders)
+fit_lme4 <- glmer(count ~ mined + (1 | site),
+                  family = poisson, data = Salamanders)
 
-# Compare predictions
-pred_tmb[1:10]
-pred_lme4[1:10]
+pred_glmmtmb(fit_tmb)[1:5]
+pred_glmer(fit_lme4)[1:5]
 
-# Predictions from usual prediction functions which do not give marginal means:
-predict(fit_tmb, type = "response")[1:10] # REs evaluated at predicted values
-predict(fit_tmb, type = "response", re.form = NA)[1:10] # REs "set to zero"
-
-
-# Logistic GLMM example (using quadrature)
-fit_tmb <- glmmTMB(I(count > 2) ~ mined + (1|site),
-  family=binomial, data=Salamanders)
-
-fit_lme4 <- glmer(I(count > 2) ~ mined + (1|site),
-  family=binomial, data=Salamanders)
-  
-# Get marginal predictions on the response scale
-pred_tmb <- pred_glmmtmb(fit_tmb)
-pred_lme4 <- pred_glmer(fit_lme4)
-
-# Compare predictions
-pred_tmb[1:10]
-pred_lme4[1:10]
-
-# Predictions from usual prediction functions which do not give marginal means:
-predict(fit_tmb, type = "response")[1:10] # REs evaluated at predicted values
-predict(fit_tmb, type = "response", re.form = NA)[1:10] # REs "set to zero"
+# The usual prediction functions do not give marginal means:
+predict(fit_tmb, type = "response")[1:5]               # REs plugged in
+predict(fit_tmb, type = "response", re.form = NA)[1:5] # REs set to zero
 ```
 
-Works with models from:
+Links without a closed form use quadrature automatically; nothing changes in
+the call:
+
+```r
+fit_bin <- glmmTMB(I(count > 2) ~ mined + (1 | site),
+                   family = binomial, data = Salamanders)
+pred_glmmtmb(fit_bin)[1:5]
+```
+
+## Bootstrap confidence intervals
+
+`boot_pred` computes parametric bootstrap confidence intervals for the
+marginal predictions, or for any function of them. Responses are simulated
+from the fitted model, the model is refit to each simulated response, and
+the statistic is recomputed from each refit's marginal predictions.
+
+```r
+# CIs for every marginal prediction
+b <- boot_pred(fit_tmb, n_boot = 1000, seed = 1)
+print(b)
+
+# CI for a function of the predictions: difference in mean predictions
+# between mined and unmined sites. The statistic receives the data the
+# model was fit to with a column `pred` of marginal predictions, so it can
+# also use variables that do not appear in the model formula.
+mined_diff <- function(data) {
+  m <- tapply(data$pred, data$mined, mean)
+  c("yes-no" = unname(m["yes"] - m["no"]))
+}
+boot_pred(fit_tmb, statistic = mined_diff, n_boot = 1000, seed = 1)
+```
+
+All refits happen once regardless of how many quantities the statistic
+returns, so adding comparisons does not add computing time. Refits with a
+variance component estimated at zero are kept and counted; see
+`?boot_pred` for the screening rules and further details.
+
+## Scope
+
 - **lme4**: `pred_glmer()` for `glmer()` and `lmer()` fits
-- **glmmTMB**: `pred_glmmtmb()` for `glmmTMB()` fits
+- **glmmTMB**: `pred_glmmtmb()` for `glmmTMB()` fits, including dispersion
+  families (e.g., nbinom1, nbinom2), zero inflation, and truncated families
+- Offsets are supported for both backends
+- **Links**: identity, log, and square-root in closed form; any other link,
+  including custom inverse links, via Gauss–Hermite quadrature
 
-## Supported Link Functions
-
-**Analytical** (fast): `identity`, `log`, `sqrt`  
-**Numerical** (via quadrature): any custom inverse link function
-
-## How It Works
-
-For a GLMM with linear predictor η = Xβ and random effects b ~ N(0, Ψ):
-
-- **Linear models**: Returns E[Y] = Xβ (no integration needed)
-- **Nonlinear models**: Computes E[g⁻¹(η + Zb)] by integrating over b
-
-For supported links, uses analytical formulas (e.g., E[exp(η + Zb)] = exp(η + σ²/2) for log link). Otherwise, uses Gauss-Hermite quadrature.
+See `vignette("predglmm")` for a worked example with a multi-phase
+longitudinal design.
 
 ## License
 
-MIT
+MIT. Provided without warranty of any kind.

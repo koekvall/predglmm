@@ -5,6 +5,6 @@
 ^Meta$
 ^\.github$
 ^\.DS_Store$
-^sim_nlme\.R$
-^sim_mse\.pdf$
+^sim_mse\.R$
 ^vignettes/predglmm_files$
+^vignettes/predglmm_cache$
